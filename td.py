@@ -12,26 +12,23 @@ a = 1
 #reward how total enjoyment after iteration
 r = 1
 
-def loop():
-    stage_values = []
-    for i in range(stage_amt):
-        stage_values.append(0)
-    for i in range(stage_amt):
-        if i == 1:
-            for pos, i in enumerate(stage_values):
-                if pos <= stage_amt-2:
-                    stage_values[pos] = i + a*(0 + (disc_fac*stage_values[pos+1]) - i)
-                else:
-                    stage_values[pos] = i + a*(1 - stage_values[pos])
-        else:
-            for pos, i in enumerate(stage_values):
-                if pos <= stage_amt-2:
-                    stage_values[pos] = i + a*(0 + (disc_fac*stage_values[pos+1]) - i)
-                else:
-                    stage_values[pos] = i + a*(1 - stage_values[pos])
-    
-    print(stage_values)
-    
-loop()
+def value_of_stage():
+    stage = {s: {"V": 0.0, "R": 0.0} for s in range(stage_amt)}
+
+    for _ in range(stage_amt): 
+        oldV = {s: stage[s]["V"] for s in stage} 
+
+        for s in range(stage_amt):
+
+            if s == stage_amt - 1:
+                target = r
+            else:
+                target = disc_fac * oldV[s + 1]
+
+            stage[s]["V"] = oldV[s] + a * (target - oldV[s])
+
+    return stage
+
+print(value_of_stage())
 
     
