@@ -15,30 +15,36 @@ stage_amt = 4
 gamma = .9
 
 #Learning rate: How quickly the model minimizes loss. Higher values are quicker but overbiases parameters, lower values take longer but are more accurate
-a = .1
+a = .9
 #Reward: can be binary but will probably be based on difficulty
 r=1
 
+param_values = {"D" : {"v" : 0.0, "w" : 0.0}} # v is the parameter value and w is the weight
+stage = {s: {"V" : 0.0, **param_values} for s in range(stage_amt)} 
+rpe = {r : 0 for r in range(stage_amt)} #RPE for each stage. Pos = outcome better than expected, Neg = outcome worse, approx 0: fully predicted no learning
+
+for s in stage:
+    for p in param_values:
+        #randomize parameter values
+        stage[s][p]['v'] = random.uniform(0 , 1)
+        stage[s][p]['w'] = random.uniform(0 , 1)
+
+
 def value_of_stage():
-
-    stage = {s: {"V": 0.0} for s in range(stage_amt)}
-    rpe = {r: 0 for r in range(stage_amt)} #RPE for each stage. Pos = outcome better than expected, Neg = outcome worse, approx 0: fully predicted no learning
-
-
-    oldV = {s: stage[s]["V"] for s in stage} 
-
+    oldV = stage.copy()
     for s in range(stage_amt): #for each stage calculate value and update
-
         if s == stage_amt - 1:
             target = r
         else:
-            target = gamma * oldV[s + 1]
+            target = gamma * oldV[s + 1]["V"]
 
-        rpe[s] = target - oldV[s] #calculate rpe
-        stage[s]["V"] = oldV[s] + a * (target - oldV[s]) #update value
-            
+        rpe[s] = target - oldV[s]["V"] #calculate rpe
+        stage[s]["V"] = sum(oldV[s][p]["v"] * oldV[s][p]["w"] for p in param_values) #update value
+        #update parameter
+        for p in param_values:
+            stage[s][p]["v"] = oldV[s][p]["v"] + a*rpe[s]*oldV[s][p]["v"]
 
-    return stage
-
-print(value_of_stage())
+print(stage, rpe)
+value_of_stage()
+print(stage, rpe)
     
