@@ -1,5 +1,6 @@
 import random
 import copy
+import numpy as np
 
 # goals: create a model that adaptively selects task difficulty for a specific individual by modeling and regulating reward prediction error (RPE)
 # 1. the learner practices tasks
@@ -20,7 +21,7 @@ pers_param = {
 # Learning rate: How quickly the model minimizes loss. 
 # Higher values are quicker but overbiases parameters, 
 # lower values take longer but are more accurate
-'a' : .9,
+'a' : .05,
 
 # Reward sensitivity: How much reward based on difficulty
 'r' : 1 
@@ -32,37 +33,47 @@ pers_param = {
 stage_amt = 4 # How many stages there are until reward
 diff = 0.1 # The difficulty of each stage
 
+
 param_values = {
-    'bias' :  {'x' : 1, 't' : 0.0},
-    'd' : {'x' : diff, 't' : 0.0}
+    'bias' : 1,
+    'd' : diff
     } 
 
-stage = {s: {"V" : 0.0, "stage_index" : {'x' : s, 't' : 0.0} , **copy.deepcopy(param_values)} for s in range(stage_amt)} 
+stage = {s: {"V" : 0.0,  **copy.deepcopy(param_values)} for s in range(stage_amt)} 
 rpe = {r : 0 for r in range(stage_amt)} # RPE for each stage. Pos = outcome better than expected, Neg = outcome worse, approx 0: fully predicted no learning
-param_values['stage_index'] = 0
+#param_values['stage_index'] = 0 
+
+
+
 
 # Engagement factor:
 
+def phi(s: int):
+    d = stage[s]['d']
+    s_norm = s / (stage_amt - 1)
+    return np.array([1.0, d, s_norm])
 
-def value_of_stage():
-    oldV = copy.deepcopy(stage)
-    newV = {}
-    for s in range(stage_amt): # for each stage calculate value and update
+def V(theta, s): 
+    return float(theta @ phi(s))
 
-        if s == stage_amt - 1:
-            target = pers_param["r"]
-        else:
-            target = pers_param["g"] * oldV[s + 1]["V"]
-        
-        rpe[s] = target - oldV[s]["V"] # calculate rpe
-        newV[s] = sum(oldV[s][p]['x'] * oldV[s][p]["t"] for p in param_values) # update value
-        stage[s]["V"] = newV[s]
+def value_of_stage(theta, s):
+    V_s = V(theta, s)
+    if s == stage_amt - 1:
+        r, V_next = pers_param['r'], 0.0
+    else:
+        r, V_next = 0.0, V(theta, s+1)
 
-        # update parameter
+    delta = r + pers_param['g'] * V_next - V_s
+    theta = theta + pers_param['a'] * delta * phi(s)
+    return theta, delta, V_s
 
-        for p in param_values: stage[s][p]["t"] = stage[s][p]['t'] + pers_param["a"] * rpe[s] * stage[s][p]['x']
+def train(epoch = 1):
+    theta = np.zeros(len(param_values) + 1)
 
-print(f"Original stages: {stage}, \nOriginal rpe{rpe}")
-value_of_stage()
-print(f"New stages: {stage}, \nNew rpe{rpe}")
+    for _ in range(epoch):
+        for s in range(stage_amt):
+            theta, rpe[s], stage[s]["V"] = value_of_stage(theta, s)
+train(50)
+print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
+print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
     
