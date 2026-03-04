@@ -36,25 +36,37 @@ param_values = {
 } 
 
 # user parameters (model does not see only estimates)
-f = random.gauss(0, 1) # Sensitivity learning progress  
-k = random.gauss(0, 1) # Effort aversion  
-e = random.gauss(0, 1) # Variability in performance
-b = random.gauss(0, 1) # Boredom rate higher is less boredom
+f = random.gauss(.5, .5/3) # Sensitivity learning progress  
+k = random.gauss(.5, .5/3) # Effort aversion  
+e = random.gauss(.5, .5/3) # Variability in performance
+b = random.gauss(.5, .5/3) # Boredom rate higher is less boredom
 skill = .1 # initial preformance at an activity for a controlled difficulty
 pers_param = ['f', 'k', 'm', 'b', 'skill']
 
 base_sigma = .02 
 scaling_factor = .3
-sigma = (base_sigma + diff * scaling_factor) / math.sqrt(skill) if skill != 0 else (base_sigma + diff * scaling_factor)
-e = random.gauss(0, sigma)
+
 
 stage = {s: {"V" : 0.0,  **copy.deepcopy(param_values)} for s in range(stage_amt)} 
 rpe = {r : 0 for r in range(stage_amt)} # RPE for each stage. Pos = outcome better than expected, Neg = outcome worse, approx 0: fully predicted no learning
 
 # Engagement factor:
 def engage(rpe, t, v):
-    cont = (f * abs(rpe)) - ((t*(stage_amt/100)/v) * k)
+    if t == 0:
+        cont = (f * abs(rpe)) - (((t/10)*(stage_amt/100)/v) * k)
+    else:
+        cont = f - (((t/10)*(stage_amt/100)/v) * k)
     return cont
+def makeparaguess(paramlist):
+
+    paramvalues = {}
+    paramvalues["Bias"] = random.gauss(.5, .5/3)
+    for param in paramlist: 
+        paramvalues[param] = random.gauss(.5, .5/3)
+    return paramvalues
+
+
+
 
 def phi(s: int):
     d = stage[s]['d']
@@ -62,6 +74,8 @@ def phi(s: int):
     return np.array([1.0, d, s_norm])
 
 def V(theta, s): 
+    sigma = (base_sigma + diff * scaling_factor) / math.sqrt(skill) if skill != 0 else (base_sigma + diff * scaling_factor)
+    e = random.gauss(0, sigma)
     v = float((theta @ phi(s)))
     return v + e
 
@@ -75,9 +89,9 @@ def value_of_stage(theta, s, t, r = r, g = g, a = a):
     delta = r + g * V_next - V_s
     theta = theta + a * delta * phi(s)
     cont = engage(delta, t, V_s)
-    if t == 1:
+    if t >= 0:
         print(f"cont factor: {cont} with values delta: {delta} and value: {V_s}")
-        print(f"equation is ({f} * {delta}) - (({t}*{stage_amt}/{V_s}) * {k})")
+        print(f"equation is ({round(f,3)} * {round(delta,3)}) - ((({round(t,3)}/100)*({stage_amt}/100)/{round(V_s,3)}) * {round(k,3)})")
     if cont < 0:
         print(f"bored after {t} trials")
         print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
@@ -102,7 +116,7 @@ def train(theta):
             print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
             print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
             trained = True
-        if t == 1:
+        if t == 100:
             print(f"trained after {t} trials")
             print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
             print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
