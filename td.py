@@ -1,6 +1,7 @@
-import random
 import copy
 import numpy as np
+import random
+import math
 
 # goals: create a model that adaptively selects task difficulty for a specific individual by modeling and regulating reward prediction error (RPE)
 # 1. the learner practices tasks
@@ -11,42 +12,49 @@ import numpy as np
 # Model individual differences in temporal discount and reward sensitivity commonly assosiated with neurodivergents.
 # Possible integration with model parameters to simulate different neurological conditions
 
+# Discount Factor: High values means future rewards matter more.
+g = .9 
+
+# Learning rate: How quickly the model minimizes loss.
+a =.01
+
+# Reward: binary 0 or 1
+r = 1
 
 
-# user parameters (model does not see only estimates)
-pers_param = {
-# Discount Factor: High values means future rewards matter more. High value is standard but possible tweaks
-'g' : .9, 
 
-# Learning rate: How quickly the model minimizes loss. 
-# Higher values are quicker but overbiases parameters, 
-# lower values take longer but are more accurate
-'a' : .05,
-
-# Reward sensitivity: How much reward based on difficulty
-'r' : 1 
-
-}
 
 
 # parameter features (model tweaks):
 stage_amt = 4 # How many stages there are until reward
 diff = 0.1 # The difficulty of each stage
-
+pacing = 0.1 # Speed of difficulty escalation 
 
 param_values = {
-    'bias' : 1,
-    'd' : diff
-    } 
+    'bias' : 1,   
+    'd' : diff,
+} 
+
+# user parameters (model does not see only estimates)
+f = random.gauss(0, 1) # Sensitivity learning progress  
+k = random.gauss(0, 1) # Effort aversion  
+e = random.gauss(0, 1) # Variability in performance
+b = random.gauss(0, 1) # Boredom rate higher is less boredom
+skill = .1 # initial preformance at an activity for a controlled difficulty
+pers_param = ['f', 'k', 'm', 'b', 'skill']
+
+base_sigma = .02 
+scaling_factor = .3
+sigma = (base_sigma + diff * scaling_factor) / math.sqrt(skill) if skill != 0 else (base_sigma + diff * scaling_factor)
+e = random.gauss(0, sigma)
 
 stage = {s: {"V" : 0.0,  **copy.deepcopy(param_values)} for s in range(stage_amt)} 
 rpe = {r : 0 for r in range(stage_amt)} # RPE for each stage. Pos = outcome better than expected, Neg = outcome worse, approx 0: fully predicted no learning
-#param_values['stage_index'] = 0 
-
-
-
 
 # Engagement factor:
+def engage(rpe, t, v):
+    cont = (f * abs(rpe)) - ((t*(stage_amt/100)/v) * k)
+    return cont
 
 def phi(s: int):
     d = stage[s]['d']
@@ -54,26 +62,53 @@ def phi(s: int):
     return np.array([1.0, d, s_norm])
 
 def V(theta, s): 
-    return float(theta @ phi(s))
+    v = float((theta @ phi(s)))
+    return v + e
 
-def value_of_stage(theta, s):
+def value_of_stage(theta, s, t, r = r, g = g, a = a):
     V_s = V(theta, s)
     if s == stage_amt - 1:
-        r, V_next = pers_param['r'], 0.0
+        r, V_next = r, 0.0
     else:
         r, V_next = 0.0, V(theta, s+1)
 
-    delta = r + pers_param['g'] * V_next - V_s
-    theta = theta + pers_param['a'] * delta * phi(s)
+    delta = r + g * V_next - V_s
+    theta = theta + a * delta * phi(s)
+    cont = engage(delta, t, V_s)
+    if t == 1:
+        print(f"cont factor: {cont} with values delta: {delta} and value: {V_s}")
+        print(f"equation is ({f} * {delta}) - (({t}*{stage_amt}/{V_s}) * {k})")
+    if cont < 0:
+        print(f"bored after {t} trials")
+        print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
+        print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
+        quit()
     return theta, delta, V_s
 
-def train(epoch = 1):
-    theta = np.zeros(len(param_values) + 1)
 
-    for _ in range(epoch):
-        for s in range(stage_amt):
-            theta, rpe[s], stage[s]["V"] = value_of_stage(theta, s)
-train(50)
-print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
-print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
-    
+
+def simulate(theta, t):
+    for s in range(stage_amt):
+        theta, rpe[s], stage[s]["V"] = value_of_stage(theta, s, t)
+    return theta
+
+def train(theta):
+    trained = False
+    t = 0
+    while not trained:
+        theta = simulate(theta, t)
+        if round(stage[stage_amt-1]["V"], 3) == 1:
+            print(f"trained after {t} trials")
+            print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
+            print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
+            trained = True
+        if t == 1:
+            print(f"trained after {t} trials")
+            print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
+            print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
+            trained = True
+        t += 1
+            
+theta = np.zeros(len(param_values) + 1)
+train(theta)
+
