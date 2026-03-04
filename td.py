@@ -41,7 +41,7 @@ k = random.gauss(.5, .5/3) # Effort aversion
 e = random.gauss(.5, .5/3) # Variability in performance
 b = random.gauss(.5, .5/3) # Boredom rate higher is less boredom
 skill = .1 # initial preformance at an activity for a controlled difficulty
-pers_param = ['f', 'k', 'm', 'b', 'skill']
+pers_param = ['f', 'k', 'e', 'b', 'skill']
 
 base_sigma = .02 
 scaling_factor = .3
@@ -51,22 +51,79 @@ stage = {s: {"V" : 0.0,  **copy.deepcopy(param_values)} for s in range(stage_amt
 rpe = {r : 0 for r in range(stage_amt)} # RPE for each stage. Pos = outcome better than expected, Neg = outcome worse, approx 0: fully predicted no learning
 
 # Engagement factor:
-def engage(rpe, t, v):
+def engage(delta, t, v, s):
     if t == 0:
-        cont = (f * abs(rpe)) - (((t/10)*(stage_amt/100)/v) * k)
+        cont = (f * abs(delta)) - (((t/10)*(stage_amt/100)/v) * k)
     else:
         cont = f - (((t/10)*(stage_amt/100)/v) * k)
-    return cont
-def makeparaguess(paramlist):
+    
+    if t >= 0:
+        pass
+        # print(f"cont factor: {cont} with values delta: {delta} and value: {v}")
+        # print(f"equation is ({round(f,3)} * {round(delta,3)}) - ((({round(t,3)}/100)*({stage_amt}/100)/{round(v,3)}) * {round(k,3)})")
+    if cont < 0:
+        # print(f"bored after {t} trials")
+        # print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
+        # print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
+        # print(trained_params[-1])
+        # print(f"actual params: f: {f}, k: {k}, e: {e}, b: {b}, skill: {skill}")
+        pass
+        #quit()
+    
+    return 0 if cont < 0 else 1 
 
+def makeparaguess(paramlist):
+    
     paramvalues = {}
     paramvalues["Bias"] = random.gauss(.5, .5/3)
     for param in paramlist: 
         paramvalues[param] = random.gauss(.5, .5/3)
     return paramvalues
 
+def calculateconfidence(randomparams, t):
+    newparams = randomparams.copy()
+    for p in newparams:
+        if p == 'Bias': continue
+        if trained_params != []:
+            newparams[p] *= trained_params[t][p]
+    z = sum(newparams.values()) 
+    
+    guess = 1/(1+math.e**(-z)) 
+    return guess
 
+def calculateloss(randomparams, cont):
+        firstlossvalue = []
 
+        for t in range(trained_params):
+            guess = calculateconfidence(randomparams, t)
+            engagedornot = (cont)
+            firstlossvalue.append(-((engagedornot * math.log(guess)) + (1-engagedornot) * math.log(1-guess)))
+
+        lossvalues = ((sum(firstlossvalue)) / t)
+        return lossvalues
+
+def freezeparameter(randomparams, cont, t):
+    
+    gradients = {}
+    for param in randomparams:
+        z = 0
+        if param != 'Bias':
+            for i in range(len(trained_params)):
+                engagedornot = (cont)
+                z += (calculateconfidence(randomparams, i) - engagedornot)*trained_params[i][param]
+        else:
+            for i in range(len(trained_params)):
+                engagedornot = (cont)
+                z += (calculateconfidence(randomparams, i) - engagedornot)
+        gradients[param] = z / t
+        
+    return gradients
+
+def train_pparams(params, cont, t, learningrate = a):
+    derivs = freezeparameter(params, cont, t)
+    for k in params:
+        params[k] -= learningrate * derivs[k]
+    return params
 
 def phi(s: int):
     d = stage[s]['d']
@@ -88,18 +145,9 @@ def value_of_stage(theta, s, t, r = r, g = g, a = a):
 
     delta = r + g * V_next - V_s
     theta = theta + a * delta * phi(s)
-    cont = engage(delta, t, V_s)
-    if t >= 0:
-        print(f"cont factor: {cont} with values delta: {delta} and value: {V_s}")
-        print(f"equation is ({round(f,3)} * {round(delta,3)}) - ((({round(t,3)}/100)*({stage_amt}/100)/{round(V_s,3)}) * {round(k,3)})")
-    if cont < 0:
-        print(f"bored after {t} trials")
-        print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
-        print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
-        quit()
+    if t != 0:
+        trained_params.append(train_pparams(makeparaguess(pers_param), engage(delta, t, V_s, s), t))
     return theta, delta, V_s
-
-
 
 def simulate(theta, t):
     for s in range(stage_amt):
@@ -116,13 +164,17 @@ def train(theta):
             print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
             print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
             trained = True
-        if t == 100:
+        if t == 500:
             print(f"trained after {t} trials")
             print("V:", [round(stage[s]["V"],3) for s in range(stage_amt)])
             print("RPE:", [round(rpe[s],3) for s in range(stage_amt)])
             trained = True
         t += 1
-            
+trained_params = []   
 theta = np.zeros(len(param_values) + 1)
 train(theta)
+print(trained_params[-1])
+print(f"actual params: f: {f}, k: {k}, e: {e}, b: {b}, skill: {skill}")
+
+
 
