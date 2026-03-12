@@ -24,14 +24,13 @@ class UserParams:
     f: float  # Sensitivity to learning progress  
     k: float  # Effort aversion  
     b: float  # Boredom rate 
-    skill: float  # initial preformance that will scale; will not be changed yet until ready for infererence
+
 
 # user parameters (model does not see only estimates)
 fixed_params = UserParams(
     f=.5,  # Sensitivity to learning progress  
     k=.5, #random.gauss(.5, .5/3) # Effort aversion  
     b=.5, #random.gauss(.5, .5/3) # Boredom rate 
-    skill=.1 # initial preformance that will scale; will not be changed yet until ready for infererence
 )
 
 stage = {s: {"V" : 0.0,  ** copy.deepcopy(param_values)} for s in range(stage_amt)} 
@@ -41,32 +40,36 @@ class ModelState:
     theta: np.ndarray
     t: int
     weights: np.ndarray
+    skill: float  # initial preformance that will scale
     particles: list
     stage_log: list = field(default_factory=list)
     episode_log: list = field(default_factory=list)
     rpe: dict = field(default_factory=lambda: {r: 0 for r in range(stage_amt)})
 
-def get_sigma(pers_param, base_sigma=.02, scaling_factor=.3):
+
+def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
     raw_sigma = base_sigma + diff * scaling_factor + 0.1
-    sigma = raw_sigma / math.sqrt(pers_param.skill) if pers_param.skill != 0 else raw_sigma
+    sigma = raw_sigma / math.sqrt(state.skill) if state.skill != 0 else raw_sigma
     return sigma
 
-def engagement_score(delta, v, t, f_val, k_val, b_val):
+def engagement_score(delta, v, t, f_val, k_val, b_val, skill_val):
     signal = f_val * abs(delta)
-    denom = max(0.05, abs(v))
+    denom = max(0.05, abs(v) + skill_val)
     effort_cost = k_val * ((t * pacing) + diff * stage_amt) / denom
     boredom_cost = b_val * max(0, t - signal * 10) * 0.01
     return signal - effort_cost - boredom_cost
 
-def engage(delta, v, t, pers_param):
-    cont = engagement_score(delta, v, t, pers_param.f, pers_param.k, pers_param.b)
+def engage(delta, v, t, pers_param, state):
+    cont = engagement_score(delta, v, t, pers_param.f, pers_param.k, pers_param.b, state.skill)
     prob = sigmoid(cont)
     return 1 if random.random() < prob else 0
 
-def makeparaguess(paramlist):
+def makeparaguess(paramlist, other = None):
     paramvalues = {}
     for param in paramlist:
         paramvalues[param] = random.uniform(0.05, 1.0)
+    if other:
+        paramvalues[other] = random.uniform(0.05, 1.0)
     return paramvalues
 
 def phi(s: int):
@@ -84,7 +87,7 @@ def bayesian_particle_update(engaged, particles, weights, delta, v, t):
     for i, p in enumerate(particles):
         f_g, k_g, b_g, skill_g = p['f'], p['k'], p['b'], p['skill']
 
-        cont = engagement_score(delta, v, t, f_g, k_g, b_g)
+        cont = engagement_score(delta, v, t, f_g, k_g, b_g, skill_g)
         prob = sigmoid(cont)
         likeh = prob if engaged else (1 - prob)
         new_weights[i] *= max(likeh, 1e-8)
@@ -105,9 +108,9 @@ def V(theta, s):
 def value_of_stage(state, s, pers_param):
     V_s = V(state.theta, s)
     if s == stage_amt - 1:
-        sigma = get_sigma(pers_param)
+        sigma = get_sigma(state)
         reward_divergence = random.gauss(0, sigma)
-        r = sigmoid(5 * (pers_param.skill - diff)) + reward_divergence
+        r = sigmoid(5 * (state.skill - diff)) + reward_divergence
         r = max(0, min(1, r))
         #r = 1
         V_next = 0.0
@@ -116,8 +119,8 @@ def value_of_stage(state, s, pers_param):
 
     delta = r + g * V_next - V_s
     state.theta = state.theta + a * delta * phi(s)
-    state.weights = bayesian_particle_update(engage(delta, V_s, state.t, pers_param), state.particles, state.weights, delta, V_s, state.t)
-    stage_engagement = engagement_score(delta, V_s, state.t, pers_param.f, pers_param.k, pers_param.b) 
+    state.weights = bayesian_particle_update(engage(delta, V_s, state.t, pers_param, state), state.particles, state.weights, delta, V_s, state.t)
+    stage_engagement = engagement_score(delta, V_s, state.t, pers_param.f, pers_param.k, pers_param.b, state.skill) 
     
     state.stage_log.append({
         'trial': state.t,
@@ -143,8 +146,10 @@ def simulate(state, pers_param):
         'est_b': sum(w * p['b'] for w, p in zip(state.weights, state.particles)),
         'est_skill': sum(w * p['skill'] for w, p in zip(state.weights, state.particles)),
     })
-    if pers_param.skill < 1:
-        pers_param.skill += .01
+    
+    learning_gain = 0.02 * (1.0 - state.skill) #skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
+    state.skill += learning_gain
+    
     return tot_epi_engagement
 
 def train(state, pers_param):
@@ -157,10 +162,8 @@ def train(state, pers_param):
 
         if max_rpe < 0.05:
             low_rpe_streak += 1
-            #print(f"streak at {low_rpe_streak}")
         else:
             low_rpe_streak = 0
-            #print("streak reset")
 
         if low_rpe_streak >= 10:
             print(f"trained after {state.t} trials")
@@ -179,15 +182,16 @@ def train(state, pers_param):
 def test_train():
     t = 1  
     N = 100
-    particles = [makeparaguess(vars(fixed_params).keys()) for _ in range(N)]
+    particles = [makeparaguess(vars(fixed_params).keys(), 'skill') for _ in range(N)]
     weights = np.ones(N) / N
     theta = np.zeros(len(param_values) + 1)
 
     state = ModelState(
-        theta=theta,
-        t=t,
-        weights=weights,
-        particles=particles
+        theta = theta,
+        t = t,
+        weights = weights,
+        particles = particles,
+        skill = .1
     )
 
     theta, t, weights = train(state, fixed_params)
@@ -196,57 +200,7 @@ def test_train():
     print("Estimated b:", sum(w * p['b'] for w, p in zip(weights, state.particles)))
     print("Estimated skill:", sum(w * p['skill'] for w, p in zip(weights, state.particles)))
     print("True params:", fixed_params)
-
-def run_model_with_params(f_val, k_val, b_val, skill_val, max_trials=100):
-
-    pers_param = UserParams(
-        f=f_val,
-        k=k_val,
-        b=b_val,
-        skill=skill_val
-    )
-
-    t = 1
-    N = 100
-    particles = [makeparaguess(vars(pers_param).keys()) for _ in range(N)]
-    weights = np.ones(N) / N
-    theta = np.zeros(len(param_values) + 1)
-
-    state = ModelState(
-        theta=theta,
-        t=t,
-        weights=weights,
-        particles=particles
-    )
-
-    while state.t <= max_trials:
-        simulate(state, pers_param)
-        state.t += 1
-
-    return [x['total_engagement'] for x in state.episode_log]
-
-def plot_param_sweep(param_name, values, fixed_params, max_trials=100):
-    plt.figure()
-
-    for val in values:
-        params = copy.copy(fixed_params)
-        setattr(params, param_name, val)
-
-        engagement_curve = run_model_with_params(
-            f_val=params.f,
-            k_val=params.k,
-            b_val=params.b,
-            skill_val=params.skill,
-            max_trials=max_trials
-        )
-
-        plt.plot(range(1, max_trials + 1), engagement_curve, label=f"{param_name}={val}")
-
-    plt.title(f"Effect of {param_name} on Engagement")
-    plt.xlabel("Trial")
-    plt.ylabel("Total Engagement")
-    plt.legend()
-    plt.show()
-
-#plot_param_sweep('e', [0.1, 0.3, 0.5, 0.7, 0.9], fixed_params, 100)
+    
+    return t
+    
 test_train()
