@@ -29,11 +29,9 @@ class UserParams:
 # user parameters (model does not see only estimates)
 fixed_params = UserParams(
     f = random.uniform(0.05, 1.0),  # Sensitivity to learning progress  
-    k = 0, # Effort aversion  
+    k = random.uniform(0.05, 1.0), # Effort aversion  
     b = random.uniform(0.05, 1.0),# Boredom rate 
 )
-
-stage = {s: {"V" : 0.0,  ** copy.deepcopy(param_values)} for s in range(stage_amt)} 
 
 @dataclass
 class ModelState:
@@ -42,7 +40,7 @@ class ModelState:
     weights: np.ndarray
     skill: float  # initial preformance that will scale
     particles: list
-    highest_eng: int
+    highest_eng: float
     t_since_eng: int
     stage_log: list = field(default_factory=list)
     episode_log: list = field(default_factory=list)
@@ -55,14 +53,16 @@ def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
     return sigma
 
 def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
+    baseline = 0.5 * math.exp(-0.005 * state.t)
     signal = f_val * abs(delta)
     denom = max(0.05, abs(v) + state.skill)
     effort_cost = k_val * ((state.t_since_eng) + diff * stage_amt) / denom 
     boredom_cost = b_val * max(0, state.t_since_eng - signal * 10) * 0.01
     
-    score = signal - effort_cost - boredom_cost
+    score = signal - effort_cost - boredom_cost + baseline
     if score < 0 and not part:
-        print(f"trial: {state.t} signal {signal} - effort {effort_cost} - boredom {boredom_cost}")
+        pass
+        #print(f"trial: {state.t} signal {signal} - effort {effort_cost} - boredom {boredom_cost}")
     if score >= state.highest_eng and not part:
         state.t_since_eng = 0
         state.highest_eng = score
@@ -84,7 +84,7 @@ def makeparaguess(paramlist, other = None):
     return paramvalues
 
 def phi(s: int):
-    d = stage[s]['d']
+    d = diff
     s_norm = s / (stage_amt - 1)
     return np.array([1.0, d, s_norm])
 
@@ -145,9 +145,8 @@ def value_of_stage(state: ModelState, s, pers_param):
         'V': V_s,
     })
     
-    learning_gain = 0.02 * (1.0 - state.skill) # skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
+    learning_gain = abs(delta) * (1.0 - state.skill) + (0.001 * stage_amt) # skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
     state.skill += learning_gain / stage_amt
-    
     return delta, stage_engagement, engaged_observation
 
 def simulate(state, pers_param):
@@ -158,10 +157,11 @@ def simulate(state, pers_param):
         tot_epi_engagement += tot_stage_engagement
         stages_completed += 1
         if not engaged and state.t > 1:
-            print(f"quit after {stages_completed} stages with rpe of {state.rpe[s]}")
+            #print(f"quit after {stages_completed} stages with rpe of {state.rpe[s]}")
             break
         else:
-            print(f'kept engagement for {s} stages with rpe of {state.rpe[s]}')
+            pass
+            #print(f'kept engagement for {s} stages with rpe of {state.rpe[s]}')
     state.episode_log.append({
         'trial': state.t,
         'total_engagement': tot_epi_engagement, # will be re engagment factor
@@ -186,13 +186,13 @@ def train(state: ModelState, pers_param):
         else:
             low_rpe_streak = 0
 
-        if low_rpe_streak >= 10:
+        if low_rpe_streak >= 10 and state.t > 50:
             print(f"trained after {state.t} trials")
             print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
             print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
             return state.theta, state.t, state.weights
 
-        if state.t >= stage_amt +1 and not engaged:
+        if state.t >= 1000 and not engaged:
             print(f"stopped after {state.t} trials")
             print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
             print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
@@ -201,7 +201,7 @@ def train(state: ModelState, pers_param):
         state.t += 1
         state.t_since_eng += 1
         
-def test_train():
+def test_train(debug = False):
     t = 1  
     N = 100
     particles = [makeparaguess(vars(fixed_params).keys()) for _ in range(N)]
@@ -215,14 +215,19 @@ def test_train():
         particles = particles,
         skill = .1,
         highest_eng = 0,
-        t_since_eng = 0
+        t_since_eng = 0,
     )
 
-    theta, t, weights = train(state, fixed_params)
-    print("Estimated f:", sum(w * p['f'] for w, p in zip(state.weights, state.particles)))
-    print("Estimated k:", sum(w * p['k'] for w, p in zip(state.weights, state.particles)))
-    print("Estimated b:", sum(w * p['b'] for w, p in zip(state.weights, state.particles)))
-    print("True params:", fixed_params)
+    if debug == True:
+        theta, t, weights = train(state, fixed_params)
+        print("Estimated f:", sum(w * p['f'] for w, p in zip(state.weights, state.particles)))
+        print("Estimated k:", sum(w * p['k'] for w, p in zip(state.weights, state.particles)))
+        print("Estimated b:", sum(w * p['b'] for w, p in zip(state.weights, state.particles)))
+        avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
+        print(f"Average stages completed per episode: {avg_stages:.2f}")
+        print("True params:", fixed_params)
     return t
 
-test_train()
+
+
+test_train(True)
