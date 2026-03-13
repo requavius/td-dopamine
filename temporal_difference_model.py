@@ -174,7 +174,7 @@ def simulate(state, pers_param):
     
     return engaged
 
-def train(state: ModelState, pers_param):
+def train(state: ModelState, pers_param, debug):
     low_rpe_streak = 0
     while True:
         engaged = simulate(state, pers_param)
@@ -187,30 +187,32 @@ def train(state: ModelState, pers_param):
             low_rpe_streak = 0
 
         if low_rpe_streak >= 10 and state.t > 50:
-            print(f"trained after {state.t} trials")
-            print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
-            print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
-            return state.theta, state.t, state.weights
+            if debug:
+                print(f"trained after {state.t} trials")
+                print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
+                print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
+            return 
 
         if state.t >= 1000 and not engaged:
-            print(f"stopped after {state.t} trials")
-            print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
-            print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
-            return state.theta, state.t, state.weights
+            if debug:
+                print(f"stopped after {state.t} trials")
+                print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
+                print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
+            return 
 
         state.t += 1
         state.t_since_eng += 1
         
-def test_train(debug = False):
-    t = 1  
-    N = 100
-    particles = [makeparaguess(vars(fixed_params).keys()) for _ in range(N)]
-    weights = np.ones(N) / N
+def test_train(true_f, true_k, true_b, debug = False):
+    
+    fixed = UserParams(f=true_f, k=true_k, b=true_b)
+    particles = [makeparaguess(vars(fixed).keys()) for _ in range(100)]
+    weights = np.ones(100) / 100
     theta = np.zeros(len(param_values) + 1)
 
     state = ModelState(
         theta = theta,
-        t = t,
+        t = 1,
         weights = weights,
         particles = particles,
         skill = .1,
@@ -218,16 +220,56 @@ def test_train(debug = False):
         t_since_eng = 0,
     )
 
+    train(state, fixed, debug)
+    
+    avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
     if debug == True:
-        theta, t, weights = train(state, fixed_params)
+        
         print("Estimated f:", sum(w * p['f'] for w, p in zip(state.weights, state.particles)))
         print("Estimated k:", sum(w * p['k'] for w, p in zip(state.weights, state.particles)))
         print("Estimated b:", sum(w * p['b'] for w, p in zip(state.weights, state.particles)))
-        avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
         print(f"Average stages completed per episode: {avg_stages:.2f}")
         print("True params:", fixed_params)
-    return t
+    
+    return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages}
 
+def collect_results(n=60):
+    results = []
+    sweep = np.linspace(0.05, 0.95, n)
+    fixed = 0.5 
 
+    for val in sweep:
+        results.append(test_train(val, fixed, fixed))
+        results.append(test_train(fixed, val, fixed)) 
+        results.append(test_train(fixed, fixed, val))
+        print(f"completed {len(results)}/{n*3}")
 
-test_train(True)
+    return results
+
+def plot_results(results):
+    f_vals     = [r['true_f']     for r in results]
+    k_vals     = [r['true_k']     for r in results]
+    b_vals     = [r['true_b']     for r in results]
+    avg_stages = [r['avg_stages'] for r in results]
+
+    _, ax = plt.subplots(figsize=(8, 6))
+
+    k_sorted = sorted(zip(k_vals, avg_stages))
+    f_sorted = sorted(zip(f_vals, avg_stages))
+    b_sorted = sorted(zip(b_vals, avg_stages))
+
+    ax.plot(*zip(*k_sorted), color='#FF5722', label='k (effort aversion)')
+    ax.plot(*zip(*f_sorted), color='#2196F3', label='f (progress sensitivity)')
+    ax.plot(*zip(*b_sorted), color='#4CAF50', label='b (boredom rate)')
+
+    ax.set_xlabel('Parameter value')
+    ax.set_ylabel('Average stages completed')
+    ax.set_title('Parameter vs Engagement')
+    ax.legend()
+
+    plt.tight_layout()
+
+    plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+plot_results(collect_results(60))
