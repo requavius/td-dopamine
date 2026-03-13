@@ -55,7 +55,7 @@ def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
 def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
     baseline = 0.5 * math.exp(-0.005 * state.t)
     signal = f_val * abs(delta)
-    denom = max(0.05, abs(v) + state.skill)
+    denom = max(f_val, abs(v) + state.skill)
     effort_cost = k_val * ((state.t_since_eng) + diff * stage_amt) / denom 
     boredom_cost = b_val * max(0, state.t_since_eng - signal * 10) * 0.01
     
@@ -149,15 +149,17 @@ def value_of_stage(state: ModelState, s, pers_param):
     state.skill += learning_gain / stage_amt
     return delta, stage_engagement, engaged_observation
 
-def simulate(state, pers_param):
+def simulate(state: ModelState, pers_param):
     tot_epi_engagement = 0
     stages_completed = 0
+
     for s in range(stage_amt):
         state.rpe[s], tot_stage_engagement, engaged = value_of_stage(state, s, pers_param)
         tot_epi_engagement += tot_stage_engagement
         stages_completed += 1
         if not engaged and state.t > 1:
             #print(f"quit after {stages_completed} stages with rpe of {state.rpe[s]}")
+            state.t_since_eng = 0
             break
         else:
             pass
@@ -186,20 +188,22 @@ def train(state: ModelState, pers_param, debug):
         else:
             low_rpe_streak = 0
 
-        if low_rpe_streak >= 10 and state.t > 50:
+        average_v = sum(V(state.theta, s) for s in range(stage_amt))/stage_amt
+        
+        if low_rpe_streak >= 10 and average_v > 0.1:
             if debug:
                 print(f"trained after {state.t} trials")
                 print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
                 print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
             return 
 
-        if state.t >= 1000 and not engaged:
+        if state.t >= 2000:
             if debug:
                 print(f"stopped after {state.t} trials")
                 print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
                 print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
             return 
-
+    
         state.t += 1
         state.t_since_eng += 1
         
@@ -229,20 +233,20 @@ def test_train(true_f, true_k, true_b, debug = False):
         print("Estimated k:", sum(w * p['k'] for w, p in zip(state.weights, state.particles)))
         print("Estimated b:", sum(w * p['b'] for w, p in zip(state.weights, state.particles)))
         print(f"Average stages completed per episode: {avg_stages:.2f}")
-        print("True params:", fixed_params)
+        print("True params:", fixed)
     
     return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages}
 
 def collect_results(n=60):
     results = []
     sweep = np.linspace(0.05, 0.95, n)
-    fixed = 0.5 
+    fixed = 0.1 
 
     for val in sweep:
         results.append(test_train(val, fixed, fixed))
         results.append(test_train(fixed, val, fixed)) 
         results.append(test_train(fixed, fixed, val))
-        print(f"completed {len(results)}/{n*3}")
+        print(f"completed {int(len(results))/3}/{n}")
 
     return results
 
@@ -272,4 +276,8 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-plot_results(collect_results(60))
+#plot_results(collect_results(60))
+#test_train(true_f=0.9, true_k=.1, true_b=.1, debug=True)
+test_train(true_f=0.9, true_k=0.1, true_b=0.1, debug=True)
+test_train(true_f=0.9, true_k=0.7, true_b=0.1, debug=True)  
+test_train(true_f=0.1, true_k=0.7, true_b=0.1, debug=True)
