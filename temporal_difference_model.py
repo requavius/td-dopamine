@@ -276,8 +276,5 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-#plot_results(collect_results(60))
+plot_results(collect_results(60))
 #test_train(true_f=0.9, true_k=.1, true_b=.1, debug=True)
-test_train(true_f=0.9, true_k=0.1, true_b=0.1, debug=True)
-test_train(true_f=0.9, true_k=0.7, true_b=0.1, debug=True)  
-test_train(true_f=0.1, true_k=0.7, true_b=0.1, debug=True)
