@@ -29,8 +29,8 @@ class UserParams:
 # user parameters (model does not see only estimates)
 fixed_params = UserParams(
     f = random.uniform(0.05, 1.0),  # Sensitivity to learning progress  
-    k = random.uniform(0.05, 1.0), #random.gauss(.5, .5/3) # Effort aversion  
-    b = random.uniform(0.05, 1.0), #random.gauss(.5, .5/3) # Boredom rate 
+    k = 0, # Effort aversion  
+    b = random.uniform(0.05, 1.0),# Boredom rate 
 )
 
 stage = {s: {"V" : 0.0,  ** copy.deepcopy(param_values)} for s in range(stage_amt)} 
@@ -57,16 +57,19 @@ def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
 def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
     signal = f_val * abs(delta)
     denom = max(0.05, abs(v) + state.skill)
-    effort_cost = k_val * ((state.t_since_eng * pacing) + diff * stage_amt) / denom
+    effort_cost = k_val * ((state.t_since_eng) + diff * stage_amt) / denom 
     boredom_cost = b_val * max(0, state.t_since_eng - signal * 10) * 0.01
+    
     score = signal - effort_cost - boredom_cost
+    if score < 0 and not part:
+        print(f"trial: {state.t} signal {signal} - effort {effort_cost} - boredom {boredom_cost}")
     if score >= state.highest_eng and not part:
         state.t_since_eng = 0
         state.highest_eng = score
     return score
 
-def engage(delta, v, pers_param, state: ModelState):
-    cont = engagement_score(delta, v, pers_param.f, pers_param.k, pers_param.b, state)
+def engage(state: ModelState, formula):
+    cont = formula
     prob = sigmoid(cont)
     decision = 1 if random.random() < prob else 0
     state.highest_eng = 0 if not decision else state.highest_eng
@@ -128,7 +131,7 @@ def value_of_stage(state: ModelState, s, pers_param):
     delta = r + g * V_next - V_s
     state.theta = state.theta + a * delta * phi(s)
     stage_engagement = engagement_score(delta, V_s, pers_param.f, pers_param.k, pers_param.b, state) 
-    engaged_observation = engage(delta, V_s, pers_param, state)
+    engaged_observation = engage(state, stage_engagement)
     engagment_prob = sigmoid(stage_engagement)
     state.weights = bayesian_particle_update(engaged_observation, delta, V_s, state)
     
@@ -142,31 +145,39 @@ def value_of_stage(state: ModelState, s, pers_param):
         'V': V_s,
     })
     
-    return delta, stage_engagement
+    learning_gain = 0.02 * (1.0 - state.skill) # skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
+    state.skill += learning_gain / stage_amt
+    
+    return delta, stage_engagement, engaged_observation
 
 def simulate(state, pers_param):
     tot_epi_engagement = 0
+    stages_completed = 0
     for s in range(stage_amt):
-        state.rpe[s], tot_stage_engagement = value_of_stage(state, s, pers_param)
+        state.rpe[s], tot_stage_engagement, engaged = value_of_stage(state, s, pers_param)
         tot_epi_engagement += tot_stage_engagement
+        stages_completed += 1
+        if not engaged and state.t > 1:
+            print(f"quit after {stages_completed} stages with rpe of {state.rpe[s]}")
+            break
+        else:
+            print(f'kept engagement for {s} stages with rpe of {state.rpe[s]}')
     state.episode_log.append({
         'trial': state.t,
-        'total_engagement': tot_epi_engagement,
+        'total_engagement': tot_epi_engagement, # will be re engagment factor
+        'Stages completed': stages_completed, # how many stages were completed before disengagement
         'max_abs_rpe': max(abs(x) for x in state.rpe.values()),
         'est_f': sum(w * p['f'] for w, p in zip(state.weights, state.particles)),
         'est_k': sum(w * p['k'] for w, p in zip(state.weights, state.particles)),
         'est_b': sum(w * p['b'] for w, p in zip(state.weights, state.particles)),
     })
     
-    learning_gain = 0.02 * (1.0 - state.skill) #skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
-    state.skill += learning_gain
-    
-    return tot_epi_engagement
+    return engaged
 
 def train(state: ModelState, pers_param):
     low_rpe_streak = 0
     while True:
-        simulate(state, pers_param)
+        engaged = simulate(state, pers_param)
 
         max_rpe = max(abs(x) for x in state.rpe.values())
 
@@ -181,7 +192,7 @@ def train(state: ModelState, pers_param):
             print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
             return state.theta, state.t, state.weights
 
-        if state.t == 2000:
+        if state.t >= stage_amt +1 and not engaged:
             print(f"stopped after {state.t} trials")
             print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
             print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
@@ -204,7 +215,7 @@ def test_train():
         particles = particles,
         skill = .1,
         highest_eng = 0,
-        t_since_eng = 1
+        t_since_eng = 0
     )
 
     theta, t, weights = train(state, fixed_params)
@@ -212,7 +223,6 @@ def test_train():
     print("Estimated k:", sum(w * p['k'] for w, p in zip(state.weights, state.particles)))
     print("Estimated b:", sum(w * p['b'] for w, p in zip(state.weights, state.particles)))
     print("True params:", fixed_params)
-    
     return t
 
 test_train()
