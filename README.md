@@ -1,15 +1,201 @@
-Conceptual Design Decisions
+# V(0) Linear Function Approximate Model for Engagment
 
-Agent parameters (model does not see only estimates):
-f: Sensitivity to learning progress  
-k: Effort aversion  
-b: Boredom rate 
+## Objective
 
-An episode represents one full completion of an activity like reading a chapter in a book. The stages within an episode are the steps that must be gone through before considering to disengaging like reading a paragraph in that chapter. The person can disengage at any stage, quitting before completing the activity.
-Engagement is evaluated as a per stage decision every episode. A between episode reengagement decision exists in the full intended model but is not yet implemented. In the current simulation the person always attempts the next episode, which is a simplification that removes a real behavioral variable for data collection purposes.
-Effort and boredom costs are zero at the start of each attempt. This reflects the assumption that a person begins a fresh activity in a neutral state before any effort accumulates.
-Skill grows per stage rather than per episode. A person who quits at stage 1 gains partial skill rather than none. This prevents agents with high effort aversion from being permanently frozen at their initial skill level and represents even small efforts can improve skill, although without a strong learning signal progress is limited.
-Reward is only available at the terminal stage. Value propagates backwards through the stage sequence via TD learning, which means early stages only acquire value because they predict eventual completion.
-RPE drives the engagement signal. How motivated a person is to continue at any stage is proportional to how surprising the current outcome is relative to their expectation, scaled by their sensitivity parameter f. A fully predicted outcome has no RPE and therfore no motivation to continue.
-Three latent parameters govern engagement behavior: f, sensitivity to learning progress; k, effort aversion; b, boredom rate. These cannot be directly observed. The model infers them using the Bayesian particle inference.
-Engagement and disengagement are the only observable signals available to the model. The true parameters are never revealed. Everything the model knows about the person comes from whether they continued or stopped.
+The objective of this model is to infer latent motivational parameters from observed engagement behavior and use those estimates to adapt task parameters in order to maintain learner engagement. The guiding hypothesis is that engagement can be sustained by regulating reward prediction error (RPE) within a range that signals meaningful learning progress without excessive effort cost.
+
+The model is structured as a generative behavioral model coupled with an online inference procedure.
+
+---
+
+## Generative Model
+
+The system models a learner interacting with a staged task environment. At each stage the learner decides whether to continue or disengage. Decisions arise from latent motivational parameters that shape how learning signals and effort costs influence engagement.
+
+The generative process is:
+
+1. A learner with latent parameters interacts with the environment.
+2. The learner experiences prediction errors during value learning.
+3. Prediction errors influence a latent engagement signal.
+4. The engagement signal determines the probability of continuing the task.
+5. A stochastic decision generates the observed behavior.
+
+Observed behavior consists only of binary continuation decisions at each stage.
+
+---
+
+## Model Structure
+
+The system is divided into three components:
+
+- environment
+- agent
+- inference
+
+---
+
+## Environment
+
+The environment defines the staged learning task.
+
+- Episodes consist of a fixed number of stages.
+- Each stage has an associated difficulty level.
+- Rewards occur at the final stage of an episode.
+- Task difficulty influences both reward probability and effort cost.
+
+State representation includes:
+
+- stage index
+- task difficulty
+- normalized stage position
+
+Reward at the final stage is determined by the learner's skill relative to task difficulty, with stochastic noise.
+
+---
+
+## Agent
+
+The agent learns stage values and generates engagement behavior.
+
+### Value Learning
+
+Stage values are approximated using linear function approximation.
+
+Value function:
+
+V(s) = θ · φ(s)
+
+Feature vector:
+
+- bias term
+- task difficulty
+- normalized stage position
+
+Weights are updated using the TD(0) update rule:
+
+θ ← θ + α δ φ(s)
+
+where
+
+δ = r + γ V(s+1) − V(s)
+
+The prediction error δ acts as a proxy for reward prediction error.
+
+### Skill Dynamics
+
+Skill represents the learner's competence at the task.
+
+- Skill increases when positive prediction errors occur.
+- Growth saturates as skill approaches a maximum.
+- Skill influences reward probability and effort cost.
+
+### Motivational Parameters
+
+Each individual is characterized by three latent parameters.
+
+- f : sensitivity to learning progress
+- k : effort aversion
+- b : boredom rate
+
+These parameters determine how prediction errors and task costs influence engagement.
+
+### Engagement Policy
+
+At each stage an engagement signal is computed from prediction error and task costs.
+
+signal = f * g(|δ|)
+
+effort_cost = effort function(skill, difficulty, stage, k)
+
+boredom_cost = boredom function(time_since_engagement, b)
+
+engagement_score = signal − effort_cost − boredom_cost
+
+Continuation probability is obtained through a logistic decision rule:
+
+P(continue) = sigmoid(engagement_score)
+
+Observed behavior is sampled from a Bernoulli distribution:
+
+continue ~ Bernoulli(P(continue))
+
+---
+
+## Inference
+
+Latent motivational parameters are inferred from observed behavior using sequential Bayesian inference.
+
+### Particle Representation
+
+The posterior distribution over parameters is approximated using a particle filter.
+
+Each particle represents a candidate parameter set:
+
+(f, k, b)
+
+Particles maintain weights proportional to how well they explain observed engagement decisions.
+
+### Likelihood
+
+For each particle the model computes the probability of the observed engagement decision given its parameters.
+
+P(behavior | parameters)
+
+Weights are updated using Bayes' rule:
+
+w_i ← w_i * likelihood_i
+
+Weights are then normalized.
+
+### Resampling
+
+Effective sample size is monitored to detect particle degeneracy.
+
+When particle diversity falls below a threshold:
+
+- particles are resampled according to their weights
+- small Gaussian noise is added to maintain exploration
+
+---
+
+## Validation
+
+Synthetic experiments verify that inferred parameters influence behavior in the expected directions.
+
+Parameter sweeps show:
+
+- increasing effort aversion decreases stages completed
+- increasing boredom rate decreases stages completed
+- increasing sensitivity to learning progress increases stages completed
+- ![](assets/20260314_035525_image.png)
+
+---
+
+## Planned Extensions
+
+Several components remain to be implemented.
+
+- a closed loop controller that modifies task parameters based on inferred motivational parameters
+- a scheduling mechanism that detects convergence of the value function
+- a policy for adapting difficulty, stage count, or pacing based on estimated parameters
+- integration with real behavioral data rather than simulated agents
+
+---
+
+## Files
+
+- temporal_difference_model.py
+  Full implementation of the environment, agent, and particle filter inference system.
+- engagement_by_params.png
+  Visualization of parameter sweeps showing the relationship between motivational parameters and engagement behavior.
+
+---
+
+## Configuration
+
+Task parameters can be modified through the following variables.
+
+- stage_amt
+  number of stages per episode
+- diff
+  baseline task difficulty
