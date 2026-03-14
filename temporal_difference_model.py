@@ -45,16 +45,16 @@ def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
     return sigma
 
 def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
+    delta_scale = 10 * (sigmoid(abs(delta)))
     
-    signal = f_val * abs(delta)
-    denom = max(f_val, abs(v) + state.skill) + 1
-    effort_cost = k_val * ((state.t_since_eng) + diff * stage_amt) / denom 
-    boredom_cost = b_val * state.t_since_eng
+    signal = f_val * delta_scale + 1
+    denom = max(0, abs(v) + state.skill) + 1
+    effort_cost = (k_val * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom 
+    boredom_cost = (b_val) * (state.t_since_eng + 1)
     
-    score = signal - effort_cost - boredom_cost
-    if score < 0 and not part:
-        pass
-        #print(f"trial: {state.t} signal {signal} - effort {effort_cost} - boredom {boredom_cost}")
+    score = signal - effort_cost - boredom_cost + get_sigma(state)
+
+
     if score >= state.highest_eng and not part:
         state.t_since_eng = 0
         state.highest_eng = score
@@ -166,14 +166,13 @@ def simulate(state: ModelState, pers_param):
         'est_k': sum(w * p['k'] for w, p in zip(state.weights, state.particles)),
         'est_b': sum(w * p['b'] for w, p in zip(state.weights, state.particles)),
     })
-    
     state.t_since_eng += 1 
-    return engaged
+    
 
 def train(state: ModelState, pers_param, debug):
     low_rpe_streak = 0
     while True:
-        engaged = simulate(state, pers_param)
+        simulate(state, pers_param)
 
         max_rpe = max(abs(x) for x in state.rpe.values())
 
@@ -234,7 +233,7 @@ def test_train(true_f = random.uniform(0.05, 1.0), true_k = random.uniform(0.05,
 def collect_results(n=60, repeats=5):
     results = []
     sweep = np.linspace(0.05, 0.95, n)
-    fixed = 0.1
+    fixed = 0.5
 
     for i, val in enumerate(sweep):
         f_stages = np.mean([test_train(val, fixed, fixed)['avg_stages'] for _ in range(repeats)])
@@ -273,5 +272,5 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-plot_results(collect_results(60,1))
+plot_results(collect_results(60,5))
 #test_train(true_f=0.9, true_k=.1, true_b=.1, debug=True)
