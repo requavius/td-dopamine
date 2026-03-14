@@ -25,14 +25,6 @@ class UserParams:
     k: float  # Effort aversion  
     b: float  # Boredom rate 
 
-
-# user parameters (model does not see only estimates)
-fixed_params = UserParams(
-    f = random.uniform(0.05, 1.0),  # Sensitivity to learning progress  
-    k = random.uniform(0.05, 1.0), # Effort aversion  
-    b = random.uniform(0.05, 1.0),# Boredom rate 
-)
-
 @dataclass
 class ModelState:
     theta: np.ndarray
@@ -53,26 +45,28 @@ def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
     return sigma
 
 def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
-    baseline = 0.5 * math.exp(-0.005 * state.t)
-    signal = f_val * abs(delta)
-    denom = max(f_val, abs(v) + state.skill)
-    effort_cost = k_val * ((state.t_since_eng) + diff * stage_amt) / denom 
-    boredom_cost = b_val * max(0, state.t_since_eng - signal * 10) * 0.01
     
-    score = signal - effort_cost - boredom_cost + baseline
+    signal = f_val * abs(delta)
+    denom = max(f_val, abs(v) + state.skill) + 1
+    effort_cost = k_val * ((state.t_since_eng) + diff * stage_amt) / denom 
+    boredom_cost = b_val * state.t_since_eng
+    
+    score = signal - effort_cost - boredom_cost
     if score < 0 and not part:
         pass
         #print(f"trial: {state.t} signal {signal} - effort {effort_cost} - boredom {boredom_cost}")
     if score >= state.highest_eng and not part:
         state.t_since_eng = 0
         state.highest_eng = score
+    
+
     return score
 
 def engage(state: ModelState, formula):
     cont = formula
     prob = sigmoid(cont)
     decision = 1 if random.random() < prob else 0
-    state.highest_eng = 0 if not decision else state.highest_eng
+    if not decision: state.highest_eng = 0
     return decision
 
 def makeparaguess(paramlist, other = None):
@@ -152,7 +146,6 @@ def value_of_stage(state: ModelState, s, pers_param):
 def simulate(state: ModelState, pers_param):
     tot_epi_engagement = 0
     stages_completed = 0
-
     for s in range(stage_amt):
         state.rpe[s], tot_stage_engagement, engaged = value_of_stage(state, s, pers_param)
         tot_epi_engagement += tot_stage_engagement
@@ -174,6 +167,7 @@ def simulate(state: ModelState, pers_param):
         'est_b': sum(w * p['b'] for w, p in zip(state.weights, state.particles)),
     })
     
+    state.t_since_eng += 1 
     return engaged
 
 def train(state: ModelState, pers_param, debug):
@@ -205,9 +199,9 @@ def train(state: ModelState, pers_param, debug):
             return 
     
         state.t += 1
-        state.t_since_eng += 1
         
-def test_train(true_f, true_k, true_b, debug = False):
+        
+def test_train(true_f = random.uniform(0.05, 1.0), true_k = random.uniform(0.05, 1.0), true_b = random.uniform(0.05, 1.0), debug = False):
     
     fixed = UserParams(f=true_f, k=true_k, b=true_b)
     particles = [makeparaguess(vars(fixed).keys()) for _ in range(100)]
@@ -237,16 +231,19 @@ def test_train(true_f, true_k, true_b, debug = False):
     
     return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages}
 
-def collect_results(n=60):
+def collect_results(n=60, repeats=5):
     results = []
     sweep = np.linspace(0.05, 0.95, n)
-    fixed = 0.1 
+    fixed = 0.1
 
-    for val in sweep:
-        results.append(test_train(val, fixed, fixed))
-        results.append(test_train(fixed, val, fixed)) 
-        results.append(test_train(fixed, fixed, val))
-        print(f"completed {int(len(results))/3}/{n}")
+    for i, val in enumerate(sweep):
+        f_stages = np.mean([test_train(val, fixed, fixed)['avg_stages'] for _ in range(repeats)])
+        k_stages = np.mean([test_train(fixed, val, fixed)['avg_stages'] for _ in range(repeats)])
+        b_stages = np.mean([test_train(fixed, fixed, val)['avg_stages'] for _ in range(repeats)])
+        results.append({'true_f': val, 'true_k': fixed, 'true_b': fixed, 'avg_stages': f_stages})
+        results.append({'true_f': fixed, 'true_k': val, 'true_b': fixed, 'avg_stages': k_stages})
+        results.append({'true_f': fixed, 'true_k': fixed, 'true_b': val, 'avg_stages': b_stages})
+        print(f"completed {i+1}/{n}")
 
     return results
 
@@ -276,5 +273,5 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-plot_results(collect_results(60))
+plot_results(collect_results(60,1))
 #test_train(true_f=0.9, true_k=.1, true_b=.1, debug=True)

@@ -1,4 +1,10 @@
 Conceptual Design Decisions
+
+Agent parameters (model does not see only estimates):
+f: Sensitivity to learning progress  
+k: Effort aversion  
+b: Boredom rate 
+
 An episode represents one full completion of an activity like reading a chapter in a book. The stages within an episode are the steps that must be gone through before considering to disengaging like reading a paragraph in that chapter. The person can disengage at any stage, quitting before completing the activity.
 Engagement is evaluated as a per stage decision every episode. A between episode reengagement decision exists in the full intended model but is not yet implemented. In the current simulation the person always attempts the next episode, which is a simplification that removes a real behavioral variable for data collection purposes.
 Effort and boredom costs are zero at the start of each attempt. This reflects the assumption that a person begins a fresh activity in a neutral state before any effort accumulates.
