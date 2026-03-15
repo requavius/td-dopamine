@@ -50,15 +50,15 @@ def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = Fa
     
     signal = f_val * delta_scale + 1
     denom = max(0, abs(v) + state.skill) + 1
-    effort_cost = (k_val * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom
+    effort_cost = (k_val) * (((state.t * .01) * stage_amt) / (denom - diff))
     boredom_cost = (b_val) * (state.t_since_eng)
     
     score = signal - effort_cost - boredom_cost
 
 
-    if score >= state.highest_eng and not part:
+    if delta >= state.highest_eng and not part:
         state.t_since_eng = 0
-        state.highest_eng = score
+        state.highest_eng = delta
     
 
     return score
@@ -88,7 +88,7 @@ def bayesian_particle_update(engaged, delta, v, state: ModelState):
     delta_scale = 10 * sigmoid(abs(delta))
     signal = state.f_arr * delta_scale + 1
     denom = max(0, abs(v) + state.skill) + 1
-    effort_cost = (state.k_arr * stage_amt + 1) * ((state.t_since_eng + 1) + diff * stage_amt) / denom
+    effort_cost = (state.k_arr) * (((state.t * .01) * stage_amt) / (denom - diff))
     boredom_cost = (state.b_arr) * (state.t_since_eng)
     scores = signal - effort_cost - boredom_cost
 
