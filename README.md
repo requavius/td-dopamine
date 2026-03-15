@@ -160,8 +160,6 @@ When particle diversity falls below a threshold:
 
 ## Validation
 
-Synthetic experiments verify that inferred parameters influence behavior in the expected directions.
-
 Parameter sweeps show:
 
 - increasing effort aversion decreases stages completed

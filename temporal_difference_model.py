@@ -51,7 +51,7 @@ def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = Fa
     signal = f_val * delta_scale + 1
     denom = max(0, abs(v) + state.skill) + 1
     effort_cost = (k_val * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom
-    boredom_cost = (b_val) * (state.t_since_eng + 1)
+    boredom_cost = (b_val) * (state.t_since_eng)
     
     score = signal - effort_cost - boredom_cost
 
@@ -89,7 +89,7 @@ def bayesian_particle_update(engaged, delta, v, state: ModelState):
     signal = state.f_arr * delta_scale + 1
     denom = max(0, abs(v) + state.skill) + 1
     effort_cost = (state.k_arr * stage_amt + 1) * ((state.t_since_eng + 1) + diff * stage_amt) / denom
-    boredom_cost = (state.b_arr) * (state.t_since_eng + 1)
+    boredom_cost = (state.b_arr) * (state.t_since_eng)
     scores = signal - effort_cost - boredom_cost
 
     probs = sigmoid_vec(scores)
@@ -239,7 +239,11 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
         print(f"Average stages completed per episode: {avg_stages:.2f}")
         print("True params:", fixed)
     
-    return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages}
+    est_f = np.dot(state.weights, state.f_arr)
+    est_k = np.dot(state.weights, state.k_arr)
+    est_b = np.dot(state.weights, state.b_arr)
+    return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
+            'est_f': est_f, 'est_k': est_k, 'est_b': est_b}
 
 def collect_results(n=60, repeats=5):
     results = []
@@ -247,12 +251,24 @@ def collect_results(n=60, repeats=5):
     fixed = 0.5
 
     for i, val in enumerate(sweep):
-        f_stages = np.mean([test_train(val, fixed, fixed)['avg_stages'] for _ in range(repeats)])
-        k_stages = np.mean([test_train(fixed, val, fixed)['avg_stages'] for _ in range(repeats)])
-        b_stages = np.mean([test_train(fixed, fixed, val)['avg_stages'] for _ in range(repeats)])
-        results.append({'param': 'f', 'true_f': val, 'true_k': fixed, 'true_b': fixed, 'avg_stages': f_stages})
-        results.append({'param': 'k', 'true_f': fixed, 'true_k': val, 'true_b': fixed, 'avg_stages': k_stages})
-        results.append({'param': 'b', 'true_f': fixed, 'true_k': fixed, 'true_b': val, 'avg_stages': b_stages})
+        f_runs = [test_train(val, fixed, fixed) for _ in range(repeats)]
+        k_runs = [test_train(fixed, val, fixed) for _ in range(repeats)]
+        b_runs = [test_train(fixed, fixed, val) for _ in range(repeats)]
+        results.append({'param': 'f', 'true_f': val, 'true_k': fixed, 'true_b': fixed,
+                        'avg_stages': np.mean([r['avg_stages'] for r in f_runs]),
+                        'est_f': np.mean([r['est_f'] for r in f_runs]),
+                        'est_k': np.mean([r['est_k'] for r in f_runs]),
+                        'est_b': np.mean([r['est_b'] for r in f_runs])})
+        results.append({'param': 'k', 'true_f': fixed, 'true_k': val, 'true_b': fixed,
+                        'avg_stages': np.mean([r['avg_stages'] for r in k_runs]),
+                        'est_f': np.mean([r['est_f'] for r in k_runs]),
+                        'est_k': np.mean([r['est_k'] for r in k_runs]),
+                        'est_b': np.mean([r['est_b'] for r in k_runs])})
+        results.append({'param': 'b', 'true_f': fixed, 'true_k': fixed, 'true_b': val,
+                        'avg_stages': np.mean([r['avg_stages'] for r in b_runs]),
+                        'est_f': np.mean([r['est_f'] for r in b_runs]),
+                        'est_k': np.mean([r['est_k'] for r in b_runs]),
+                        'est_b': np.mean([r['est_b'] for r in b_runs])})
         print(f"completed {i+1}/{n}")
 
     return results
@@ -262,21 +278,36 @@ def plot_results(results):
     k_sweep = [(r['true_k'], r['avg_stages']) for r in results if r['param'] == 'k']
     b_sweep = [(r['true_b'], r['avg_stages']) for r in results if r['param'] == 'b']
 
-    _, ax = plt.subplots(figsize=(8, 6))
+    f_est = [(r['true_f'], r['est_f']) for r in results if r['param'] == 'f']
+    k_est = [(r['true_k'], r['est_k']) for r in results if r['param'] == 'k']
+    b_est = [(r['true_b'], r['est_b']) for r in results if r['param'] == 'b']
 
-    ax.plot(*zip(*sorted(k_sweep)), color='#FF5722', label='k (effort aversion)')
-    ax.plot(*zip(*sorted(f_sweep)), color='#2196F3', label='f (progress sensitivity)')
-    ax.plot(*zip(*sorted(b_sweep)), color='#4CAF50', label='b (boredom rate)')
+    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
-    ax.set_xlabel('Parameter value')
-    ax.set_ylabel('Average stages completed')
-    ax.set_title('Parameter vs Engagement')
-    ax.legend()
+    ax1.plot(*zip(*sorted(k_sweep)), color='#FF5722', label='k (effort aversion)')
+    ax1.plot(*zip(*sorted(f_sweep)), color='#2196F3', label='f (progress sensitivity)')
+    ax1.plot(*zip(*sorted(b_sweep)), color='#4CAF50', label='b (boredom rate)')
+    ax1.set_xlabel('Parameter value')
+    ax1.set_ylabel('Average stages completed')
+    ax1.set_title('Parameter vs Engagement')
+    ax1.legend()
+
+    lims = [0.05, 0.95]
+    ax2.plot(lims, lims, 'k--', alpha=0.4, label='ideal recovery')
+    ax2.scatter(*zip(*sorted(f_est)), color='#2196F3', s=15, alpha=0.7, label='est f')
+    ax2.scatter(*zip(*sorted(k_est)), color='#FF5722', s=15, alpha=0.7, label='est k')
+    ax2.scatter(*zip(*sorted(b_est)), color='#4CAF50', s=15, alpha=0.7, label='est b')
+    ax2.set_xlabel('True parameter value')
+    ax2.set_ylabel('Estimated parameter value')
+    ax2.set_title('Parameter Recovery')
+    ax2.set_xlim(lims)
+    ax2.set_ylim(lims)
+    ax2.legend()
 
     plt.tight_layout()
 
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-plot_results(collect_results(60,5))
-#test_train(debug=True)
+plot_results(collect_results(60,10))
+#test_train(0.1, debug=True)
