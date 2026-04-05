@@ -26,7 +26,9 @@ class ModelState:
     t: int
     weights: np.ndarray
     skill: float  # initial preformance that will scale
-    arr: np.ndarray
+    f_arr: np.ndarray
+    k_arr: np.ndarray
+    b_arr: np.ndarray
     highest_eng: float
     t_since_eng: int
     stage_log: list = field(default_factory=list)
