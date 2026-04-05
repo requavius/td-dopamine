@@ -2,122 +2,9 @@ import numpy as np
 import random
 import math
 import matplotlib.pyplot as plt
-from dataclasses import dataclass, field
+from engagement_bayeserian import *
+from config import *
 
-g = .9 
-
-a =.05
-
-# task parameters (model tweaks):
-stage_amt = 4 # How many stages there are until reward
-diff = .1 # The difficulty of each stage; will not be changed yet until ready for infererence
-
-param_values = {
-    'bias' : 1,   
-    'd' : diff,
-} 
-
-@dataclass
-class UserParams:
-    f: float  # Sensitivity to learning progress  
-    k: float  # Effort aversion  
-    b: float  # Boredom rate 
-
-@dataclass
-class ModelState:
-    theta: np.ndarray
-    t: int
-    weights: np.ndarray
-    skill: float  # initial preformance that will scale
-    f_arr: np.ndarray
-    k_arr: np.ndarray
-    b_arr: np.ndarray
-    highest_eng: float
-    t_since_eng: int
-    stage_log: list = field(default_factory=list)
-    episode_log: list = field(default_factory=list)
-    rpe: dict = field(default_factory=lambda: {r: 0 for r in range(stage_amt)})
-
-
-
-def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
-    raw_sigma = base_sigma + diff * scaling_factor + 0.1
-    sigma = raw_sigma / math.sqrt(state.skill) if state.skill != 0 else raw_sigma
-    return sigma
-
-def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
-    delta_scale = 10 * (sigmoid(abs(delta)))
-    
-    signal = f_val * delta_scale + 1
-    denom = max(0, abs(v) + state.skill) + 1
-    effort_cost = (k_val * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom
-    boredom_cost = (b_val) * (state.t_since_eng)
-    
-    score = signal - effort_cost - boredom_cost
-
-
-    if score >= state.highest_eng and not part:
-        state.t_since_eng = 0
-        state.highest_eng = score
-    
-
-    return score
-
-def engage(state: ModelState, formula):
-    cont = formula
-    prob = sigmoid(cont)
-    decision = 1 if random.random() < prob else 0
-    if not decision: state.highest_eng = -math.inf
-    return decision
-
-
-def phi(s: int):
-    d = diff
-    s_norm = s / (stage_amt - 1)
-    return np.array([1.0, d, s_norm])
-
-def sigmoid(z):
-    z = max(-60, min(60, z))
-    return 1 / (1 + math.exp(-z))
-
-def sigmoid_vec(z):
-    z = np.clip(z, -60, 60)
-    return 1 / (1 + np.exp(-z))
-
-def bayesian_particle_update(engaged, delta, v, state: ModelState):
-    delta_scale = 10 * sigmoid(abs(delta))
-    signal = state.f_arr * delta_scale + 1
-    denom = max(0, abs(v) + state.skill) + 1
-    effort_cost = (state.k_arr * stage_amt + 1) * ((state.t_since_eng + 1) + diff * stage_amt) / denom
-    boredom_cost = (state.b_arr) * (state.t_since_eng)
-    scores = signal - effort_cost - boredom_cost
-
-    probs = sigmoid_vec(scores)
-    likelihoods = probs if engaged else (1 - probs)
-
-    new_weights = state.weights * np.maximum(likelihoods, 1e-8)
-    total = new_weights.sum()
-    if total == 0:
-        new_weights = np.ones_like(new_weights) / len(new_weights)
-    else:
-        new_weights /= total
-
-    return new_weights
-
-def resample_if_needed(state: ModelState, threshold=0.5):
-    n = len(state.weights)
-    ess = 1.0 / np.sum(state.weights ** 2)
-    if ess < threshold * n:
-        indices = np.random.choice(n, size=n, p=state.weights)
-        state.f_arr = np.clip(state.f_arr[indices] + np.random.normal(0, 0.02, n), 0.05, 1.0)
-        state.k_arr = np.clip(state.k_arr[indices] + np.random.normal(0, 0.02, n), 0.05, 1.0)
-        state.b_arr = np.clip(state.b_arr[indices] + np.random.normal(0, 0.02, n), 0.05, 1.0)
-        state.weights = np.ones(n) / n
-
-def V(theta, s):
-
-    v = float((theta @ phi(s)))
-    return v
 
 def value_of_stage(state: ModelState, s, pers_param):
     V_s = V(state.theta, s)
@@ -168,9 +55,9 @@ def simulate(state: ModelState, pers_param):
         'total_engagement': tot_epi_engagement, # will be re engagment factor
         'Stages completed': stages_completed, # how many stages were completed before disengagement
         'max_abs_rpe': max(abs(x) for x in state.rpe.values()),
-        'est_f': np.dot(state.weights, state.f_arr),
-        'est_k': np.dot(state.weights, state.k_arr),
-        'est_b': np.dot(state.weights, state.b_arr),
+        'est_f' : np.dot(state.weights[0], state.arr[0]),
+        'est_k' : np.dot(state.weights[1], state.arr[1]),
+        'est_b' : np.dot(state.weights[2], state.arr[2])
     })
     state.t_since_eng += 1 
     
@@ -212,17 +99,15 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     if true_b is None: true_b = random.uniform(0.05, 1.0)
     
     fixed = UserParams(f=true_f, k=true_k, b=true_b)
-    n_particles = 100
-    weights = np.ones(n_particles) / n_particles
+    n_particles = 4
+    weights = np.ones((3, n_particles)) / n_particles
     theta = np.zeros(len(param_values) + 1)
 
     state = ModelState(
         theta = theta,
         t = 1,
         weights = weights,
-        f_arr = np.random.uniform(0.05, 1.0, n_particles),
-        k_arr = np.random.uniform(0.05, 1.0, n_particles),
-        b_arr = np.random.uniform(0.05, 1.0, n_particles),
+        arr = np.random.uniform(0.05, 1.0, size = (3, n_particles)),
         skill = .1,
         highest_eng = -math.inf,
         t_since_eng = 0,
@@ -233,15 +118,15 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
     if debug == True:
         
-        print("Estimated f:", np.dot(state.weights, state.f_arr))
-        print("Estimated k:", np.dot(state.weights, state.k_arr))
-        print("Estimated b:", np.dot(state.weights, state.b_arr))
+        print("Estimated f:", np.dot(state.weights[0], state.arr[0]))
+        print("Estimated k:", np.dot(state.weights[1], state.arr[1]))
+        print("Estimated b:", np.dot(state.weights[2], state.arr[2]))
         print(f"Average stages completed per episode: {avg_stages:.2f}")
         print("True params:", fixed)
     
-    est_f = np.dot(state.weights, state.f_arr)
-    est_k = np.dot(state.weights, state.k_arr)
-    est_b = np.dot(state.weights, state.b_arr)
+    est_f = np.dot(state.weights[0], state.arr[0])
+    est_k = np.dot(state.weights[1], state.arr[1])
+    est_b = np.dot(state.weights[2], state.arr[2])
     return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
             'est_f': est_f, 'est_k': est_k, 'est_b': est_b}
 
@@ -309,5 +194,5 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-plot_results(collect_results(60,5))
-#test_train(0.1, debug=True)
+#plot_results(collect_results(60,5))
+test_train(0.9, debug=True)

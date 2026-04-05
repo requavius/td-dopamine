@@ -1,4 +1,4 @@
-# V(0) Linear Function Approximate Model for Engagment
+# V(0) Linear Function Approximate Model for Engagement
 
 ## Objective
 
