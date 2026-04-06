@@ -100,7 +100,7 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     if true_b is None: true_b = random.uniform(0.05, 1.0)
     
     fixed = UserParams(f=true_f, k=true_k, b=true_b)
-    n_particles = 1000
+    n_particles = 100
     weights = np.ones(n_particles) / n_particles
     theta = np.zeros(len(param_values) + 1)
 
@@ -117,20 +117,21 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     train(state, fixed, debug)
     
     avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
-    if debug == True:
-        actual = np.array([fixed])
-        prediction = np.array[(np.dot(state.weights, state.particle_matrix))]
-        parameters = ['f', 'k', 'b']
-        print("Estimated f:", np.dot(state.weights, state.particle_matrix[0]))
-        print("Estimated k:", np.dot(state.weights, state.particle_matrix[1]))
-        print("Estimated b:", np.dot(state.weights, state.particle_matrix[2]))
+    actual: np.ndarray = np.array([fixed.f, fixed.k, fixed.b])
+    prediction: np.ndarray = np.array([np.dot(state.weights, state.particle_matrix[i]) for i in range(state.particle_matrix.shape[0])])
+    parameters = ['f', 'k', 'b']
+    rmse_values = np.array([np.sqrt(np.mean((actual[i] - prediction[i])**2)) for i in range(3)])
+    if debug:
+
+        print("Estimated f:", prediction[0])
+        print("Estimated k:", prediction[1])
+        print("Estimated b:", prediction[2])
         print(f"Average stages completed per episode: {avg_stages:.2f}")
-        print("True params:", fixed)
-        rmse_values = np.sqrt(np.mean((actual - prediction)**2, axis=0))
+        print("True params:", actual)
+        
         df_results = pd.DataFrame({
-        'Paramter': parameters,
-        'RMSE': rmse_values,
-        'Accuracy Status': ['High' if x < 1.5 else 'Medium' for x in rmse_values]
+            'Parameter': parameters,
+            'RMSE': rmse_values,
         })
         print(df_results.to_string(index=False))
     
@@ -138,8 +139,13 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     est_f = np.dot(state.weights, state.particle_matrix[0])
     est_k = np.dot(state.weights, state.particle_matrix[1])
     est_b = np.dot(state.weights, state.particle_matrix[2])
+
+    rmse_f = rmse_values[0]
+    rmse_k = rmse_values[1]
+    rmse_b = rmse_values[2]
+
     return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
-            'est_f': est_f, 'est_k': est_k, 'est_b': est_b}
+            'est_f': est_f, 'est_k': est_k, 'est_b': est_b, 'rmse_f' : rmse_f, 'rmse_k' : rmse_k, 'rmse_b' : rmse_b}
 
 def collect_results(n=60, repeats=5):
     results = []
@@ -154,17 +160,28 @@ def collect_results(n=60, repeats=5):
                         'avg_stages': np.mean([r['avg_stages'] for r in f_runs]),
                         'est_f': np.mean([r['est_f'] for r in f_runs]),
                         'est_k': np.mean([r['est_k'] for r in f_runs]),
-                        'est_b': np.mean([r['est_b'] for r in f_runs])})
+                        'est_b': np.mean([r['est_b'] for r in f_runs]),
+                        'rmse_f' : np.mean([r['rmse_f'] for r in f_runs]),
+                        'rmse_k' : np.mean([r['rmse_k'] for r in f_runs]),
+                        'rmse_b' : np.mean([r['rmse_b'] for r in f_runs]),
+                        })
         results.append({'param': 'k', 'true_f': fixed, 'true_k': val, 'true_b': fixed,
                         'avg_stages': np.mean([r['avg_stages'] for r in k_runs]),
                         'est_f': np.mean([r['est_f'] for r in k_runs]),
                         'est_k': np.mean([r['est_k'] for r in k_runs]),
-                        'est_b': np.mean([r['est_b'] for r in k_runs])})
+                        'est_b': np.mean([r['est_b'] for r in k_runs]),
+                        'rmse_f' : np.mean([r['rmse_f'] for r in k_runs]),
+                        'rmse_k' : np.mean([r['rmse_k'] for r in k_runs]),
+                        'rmse_b' : np.mean([r['rmse_b'] for r in k_runs]),})
         results.append({'param': 'b', 'true_f': fixed, 'true_k': fixed, 'true_b': val,
                         'avg_stages': np.mean([r['avg_stages'] for r in b_runs]),
                         'est_f': np.mean([r['est_f'] for r in b_runs]),
                         'est_k': np.mean([r['est_k'] for r in b_runs]),
-                        'est_b': np.mean([r['est_b'] for r in b_runs])})
+                        'est_b': np.mean([r['est_b'] for r in b_runs]),
+                        'rmse_f' : np.mean([r['rmse_f'] for r in b_runs]),
+                        'rmse_k' : np.mean([r['rmse_k'] for r in b_runs]),
+                        'rmse_b' : np.mean([r['rmse_b'] for r in b_runs]),
+                        })
         print(f"completed {i+1}/{n}")
 
     return results
@@ -178,7 +195,11 @@ def plot_results(results):
     k_est = [(r['true_k'], r['est_k']) for r in results if r['param'] == 'k']
     b_est = [(r['true_b'], r['est_b']) for r in results if r['param'] == 'b']
 
-    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    f_rmse = [(r['true_f'], r['rmse_f']) for r in results if r['param'] == 'f']
+    k_rmse = [(r['true_k'], r['rmse_k']) for r in results if r['param'] == 'k']
+    b_rmse = [(r['true_b'], r['rmse_b']) for r in results if r['param'] == 'b']
+
+    _, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(14, 6))
 
     ax1.plot(*zip(*sorted(k_sweep)), color='#FF5722', label='k (effort aversion)')
     ax1.plot(*zip(*sorted(f_sweep)), color='#2196F3', label='f (progress sensitivity)')
@@ -190,20 +211,31 @@ def plot_results(results):
 
     lims = [0.05, 0.95]
     ax2.plot(lims, lims, 'k--', alpha=0.4, label='ideal recovery')
-    ax2.scatter(*zip(*sorted(f_est)), color='#2196F3', s=15, alpha=0.7, label='est f')
-    ax2.scatter(*zip(*sorted(k_est)), color='#FF5722', s=15, alpha=0.7, label='est k')
-    ax2.scatter(*zip(*sorted(b_est)), color='#4CAF50', s=15, alpha=0.7, label='est b')
+    ax2.scatter(*zip(*sorted(f_est)), color='#2196F3', label='est f')
+    ax2.scatter(*zip(*sorted(k_est)), color='#FF5722', label='est k')
+    ax2.scatter(*zip(*sorted(b_est)), color='#4CAF50', label='est b')
     ax2.set_xlabel('True parameter value')
-    ax2.set_ylabel('Estimated parameter value')
+    ax2.set_ylabel('Parameter parameter value')
     ax2.set_title('Parameter Recovery')
     ax2.set_xlim(lims)
     ax2.set_ylim(lims)
     ax2.legend()
+
+
+    ax3.plot(*zip(*sorted(f_rmse)), color='#2196F3', s=15, alpha=0.7, label='rmse f')
+    ax3.plt(*zip(*sorted(k_rmse)), color='#FF5722', s=15, alpha=0.7, label='rmse k')
+    ax3.plot(*zip(*sorted(b_rmse)), color='#4CAF50', s=15, alpha=0.7, label='rmse b')
+    ax3.set_xlabel('True parameter value')
+    ax3.set_ylabel('Parameter RMSE')
+    ax3.set_title('Parameter Accuracy')
+    ax3.set_xlim(lims)
+    ax3.set_ylim(lims)
+    ax3.legend()
 
     plt.tight_layout()
 
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-#plot_results(collect_results(60, 5))
-test_train(0.9, debug=True)
+plot_results(collect_results(60, 5))
+#test_train(0.9, debug=True)
