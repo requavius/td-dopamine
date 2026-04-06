@@ -52,7 +52,10 @@ def resample_if_needed(state: ModelState, threshold=0.5):
     if ess < threshold * n:
         indices = np.random.choice(n, size=n, p=state.weights)
         for s in range(state.particle_matrix.shape[0]):
+            p_range = state.particle_matrix[s].max() - state.particle_matrix[s].min()
             state.particle_matrix[s] = np.clip(state.particle_matrix[s][indices] + np.random.normal(0, 0.02, n), 0.05, 1.0) 
-        state.weights = np.ones(n) / n
+            noise = random.gauss(0, p_range * .2 * (np.power(state.particle_matrix.shape[1], (-1)/state.particle_matrix.shape[0])))
+            state.particle_matrix[s] += noise 
+        state.weights = np.ones(n) / n 
 
 

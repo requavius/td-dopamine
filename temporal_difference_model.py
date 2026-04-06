@@ -4,6 +4,7 @@ import math
 import matplotlib.pyplot as plt
 from engagement_bayeserian import *
 from config import *
+import pandas as pd
 
 
 def value_of_stage(state: ModelState, s, pers_param):
@@ -99,7 +100,7 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     if true_b is None: true_b = random.uniform(0.05, 1.0)
     
     fixed = UserParams(f=true_f, k=true_k, b=true_b)
-    n_particles = 100
+    n_particles = 1000
     weights = np.ones(n_particles) / n_particles
     theta = np.zeros(len(param_values) + 1)
 
@@ -117,13 +118,23 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     
     avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
     if debug == True:
-        
+        actual = np.array([fixed])
+        prediction = np.array[(np.dot(state.weights, state.particle_matrix))]
+        parameters = ['f', 'k', 'b']
         print("Estimated f:", np.dot(state.weights, state.particle_matrix[0]))
         print("Estimated k:", np.dot(state.weights, state.particle_matrix[1]))
         print("Estimated b:", np.dot(state.weights, state.particle_matrix[2]))
         print(f"Average stages completed per episode: {avg_stages:.2f}")
         print("True params:", fixed)
+        rmse_values = np.sqrt(np.mean((actual - prediction)**2, axis=0))
+        df_results = pd.DataFrame({
+        'Paramter': parameters,
+        'RMSE': rmse_values,
+        'Accuracy Status': ['High' if x < 1.5 else 'Medium' for x in rmse_values]
+        })
+        print(df_results.to_string(index=False))
     
+        
     est_f = np.dot(state.weights, state.particle_matrix[0])
     est_k = np.dot(state.weights, state.particle_matrix[1])
     est_b = np.dot(state.weights, state.particle_matrix[2])
@@ -194,5 +205,5 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-#plot_results(collect_results(60,5))
+#plot_results(collect_results(60, 5))
 test_train(0.9, debug=True)
