@@ -6,10 +6,10 @@ from config import *
 def formula(f_val, k_val, b_val, v, delta, state: ModelState):
     delta_scale = 10 * (sigmoid(abs(delta)))
     
-    signal = f_val * delta_scale + 1
+    signal = (f_val) * delta_scale + 1
     denom = max(0, abs(v) + state.skill) + 1
-    effort_cost = (k_val * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom
-    boredom_cost = (b_val) * (state.t * 0.01)
+    effort_cost = ((k_val) * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom
+    boredom_cost = ((b_val)) * (state.t * 0.01)
     
     return signal - effort_cost - boredom_cost
 
@@ -32,7 +32,7 @@ def engage(state: ModelState, score):
 
 def bayesian_particle_update(engaged, delta, v, state: ModelState):
 
-    scores = formula(state.f_arr, state.k_arr, state.b_arr, v, delta, state)
+    scores = formula(state.particle_matrix[0], state.particle_matrix[1], state.particle_matrix[2], v, delta, state)
 
     probs: np.ndarray = sigmoid(scores)
     likelihoods = probs if engaged else (1 - probs)
@@ -51,8 +51,8 @@ def resample_if_needed(state: ModelState, threshold=0.5):
     ess = 1.0 / np.sum(state.weights ** 2)
     if ess < threshold * n:
         indices = np.random.choice(n, size=n, p=state.weights)
-        state.f_arr = np.clip(state.f_arr[indices] + np.random.normal(0, 0.02, n), 0.05, 1.0)
-        state.k_arr = np.clip(state.k_arr[indices] + np.random.normal(0, 0.02, n), 0.05, 1.0)
-        state.b_arr = np.clip(state.b_arr[indices] + np.random.normal(0, 0.02, n), 0.05, 1.0)
+        for s in range(state.particle_matrix.shape[0]):
+            state.particle_matrix[s] = np.clip(state.particle_matrix[s][indices] + np.random.normal(0, 0.02, n), 0.05, 1.0) 
         state.weights = np.ones(n) / n
+
 

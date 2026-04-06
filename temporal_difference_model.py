@@ -55,9 +55,9 @@ def simulate(state: ModelState, pers_param):
         'total_engagement': tot_epi_engagement, # will be re engagment factor
         'Stages completed': stages_completed, # how many stages were completed before disengagement
         'max_abs_rpe': max(abs(x) for x in state.rpe.values()),
-        'est_f': np.dot(state.weights, state.f_arr),
-        'est_k': np.dot(state.weights, state.k_arr),
-        'est_b': np.dot(state.weights, state.b_arr),
+        'est_f': np.dot(state.weights, state.particle_matrix[0]),
+        'est_k': np.dot(state.weights, state.particle_matrix[1]),
+        'est_b': np.dot(state.weights, state.particle_matrix[2]),
     })
     state.t_since_eng += 1 
     
@@ -107,9 +107,7 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
         theta = theta,
         t = 1,
         weights = weights,
-        f_arr = np.random.uniform(0.05, 1.0, n_particles),
-        k_arr = np.random.uniform(0.05, 1.0, n_particles),
-        b_arr = np.random.uniform(0.05, 1.0, n_particles),
+        particle_matrix = np.random.uniform(0.05, 1.0, size=(3, n_particles)),
         skill = .1,
         highest_eng = -math.inf,
         t_since_eng = 0,
@@ -120,15 +118,15 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
     if debug == True:
         
-        print("Estimated f:", np.dot(state.weights, state.f_arr))
-        print("Estimated k:", np.dot(state.weights, state.k_arr))
-        print("Estimated b:", np.dot(state.weights, state.b_arr))
+        print("Estimated f:", np.dot(state.weights, state.particle_matrix[0]))
+        print("Estimated k:", np.dot(state.weights, state.particle_matrix[1]))
+        print("Estimated b:", np.dot(state.weights, state.particle_matrix[2]))
         print(f"Average stages completed per episode: {avg_stages:.2f}")
         print("True params:", fixed)
     
-    est_f = np.dot(state.weights, state.f_arr)
-    est_k = np.dot(state.weights, state.k_arr)
-    est_b = np.dot(state.weights, state.b_arr)
+    est_f = np.dot(state.weights, state.particle_matrix[0])
+    est_k = np.dot(state.weights, state.particle_matrix[1])
+    est_b = np.dot(state.weights, state.particle_matrix[2])
     return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
             'est_f': est_f, 'est_k': est_k, 'est_b': est_b}
 
