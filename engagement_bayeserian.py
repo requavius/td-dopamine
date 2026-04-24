@@ -3,36 +3,41 @@ import math
 import numpy as np
 from config import *
 
-def formula(f_val, k_val, b_val, v, delta, state: ModelState):
-    delta_scale = 10 * (sigmoid(abs(delta)))
+def ddm(f_val, k_val, b_val, delta, s, state: ModelState, prob = False):
+    boundary = 1/k_val
+    dt = 1/stage_amt
+    decay_rate = 0.3 
+    if state.t > 1:
+        delta = state.stage_log[(state.t-1)*stage_amt-1]['delta'] * math.exp(-decay_rate * s)
     
-    signal = (f_val) * delta_scale + 1
-    denom = max(0, abs(v) + state.skill) + 1
-    effort_cost = ((k_val) * stage_amt + 1) *((state.t_since_eng + 1) + diff * stage_amt) / denom
-    boredom_cost = ((b_val)) * (state.t * 0.01)
+    dW = random.gauss() * math.sqrt(dt) # noise * tiny change in time
+    sigma = .1
     
-    return signal - effort_cost - boredom_cost
+    boredom = b_val * math.log1p(state.t)
+    reward_signal = f_val * delta 
+    
+    drift_rate = boredom - reward_signal
+    time = state.t + dt*s
+    try: position = state.stage_log[state.t+s -1]['position'] + drift_rate*dt + sigma*dW
+    except: position = 0 + drift_rate*dt + sigma*dW
+    if prob:
+        return boundary, sigma, drift_rate
+    elif position < boundary:
+        return time, False, position
+    elif position >= boundary:
+        # print(f"delta={delta: 3f} noise={.1*dW: 3f}")
+        return time, True, position
+    
+def formula(f_val, k_val, b_val, s, delta, state: ModelState):
+    startpos = 0
+    boundary, sigma, drift_rate = ddm(f_val, k_val, b_val, delta, s, state, prob = True)
+    prob = (boundary - startpos)/(sigma*(math.sqrt(2*math.pi*state.t**3)))*math.exp(-(boundary-startpos-drift_rate*state.t)**2/2*(sigma**2)*state.t)
 
-def engagement_score(delta, v, f_val, k_val, b_val, state: ModelState, part = False):
     
-    score = formula(f_val, k_val, b_val, v, delta, state)
-    
-    if score >= state.highest_eng and not part:
-        state.t_since_eng = 0
-        state.highest_eng = score
-    
-
-    return score
-
-def engage(state: ModelState, score):
-    prob = sigmoid(score)
-    decision = 1 if random.random() < prob else 0
-    if not decision: state.highest_eng = -math.inf
-    return decision
 
 def bayesian_particle_update(engaged, delta, v, state: ModelState):
 
-    scores = formula(state.particle_matrix[0], state.particle_matrix[1], state.particle_matrix[2], v, delta, state)
+    scores = formula(state.particle_matrix[0], state.particle_matrix[1], state.particle_matrix[2], delta, state)
 
     probs: np.ndarray = sigmoid(scores)
     likelihoods = probs if engaged else (1 - probs)

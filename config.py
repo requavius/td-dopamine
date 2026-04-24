@@ -27,8 +27,6 @@ class ModelState:
     weights: np.ndarray
     skill: float  # initial preformance that will scale
     particle_matrix: np.ndarray
-    highest_eng: float
-    t_since_eng: int
     stage_log: list = field(default_factory=list)
     episode_log: list = field(default_factory=list)
     rpe: dict = field(default_factory=lambda: {r: 0 for r in range(stage_amt)})
@@ -52,3 +50,6 @@ def V(theta, s):
 
     v = float((theta @ phi(s)))
     return v
+
+def smoothstep(x):
+    return (3*x**2) - (2*x**3)

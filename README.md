@@ -99,25 +99,13 @@ Each individual is characterized by three latent parameters.
 
 These parameters determine how prediction errors and task costs influence engagement.
 
-### Engagement Policy
+### Engagement Policy -- Drift Diffusion Model (DDM)
 
-At each stage an engagement signal is computed from prediction error and task costs.
+The DDM models the probability distribution of disengagement over time.
 
-signal = f * g(|δ|)
+Movement towards a disengagment descision over time is governed by the parameters.
 
-effort_cost = effort function(skill, difficulty, stage, k)
-
-boredom_cost = boredom function(time_since_engagement, b)
-
-engagement_score = signal − effort_cost − boredom_cost
-
-Continuation probability is obtained through a logistic decision rule:
-
-P(continue) = sigmoid(engagement_score)
-
-Observed behavior is sampled from a Bernoulli distribution:
-
-continue ~ Bernoulli(P(continue))
+- Drift rate (f) : Speed of reaching a decision 
 
 ---
 

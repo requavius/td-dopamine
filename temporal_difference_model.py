@@ -20,52 +20,48 @@ def value_of_stage(state: ModelState, s, pers_param):
 
     delta = r + g * V_next - V_s
     state.theta = state.theta + a * delta * phi(s)
-    stage_engagement = engagement_score(delta, V_s, pers_param.f, pers_param.k, pers_param.b, state) 
-    engaged_observation = engage(state, stage_engagement)
-    engagment_prob = sigmoid(stage_engagement)
-    state.weights = bayesian_particle_update(engaged_observation, delta, V_s, state)
+    # engagment_prob = sigmoid(stage_engagement)
+    dt, engaged_observation, position = ddm( pers_param.f, pers_param.k, pers_param.b, delta, s, state) 
+    stage_engagement = formula( pers_param.f, pers_param.k, pers_param.b, delta, s, state) 
+    # state.weights = bayesian_particle_update(engaged_observation, delta, V_s, state)
     resample_if_needed(state)
 
     state.stage_log.append({
         'trial': state.t,
         'stage': s,
-        'engagement_score': stage_engagement,
-        'engagement_prob': engagment_prob,
+        'dt': dt,
+        # 'engagement_score': stage_engagement,
+        # 'engagement_prob': engagment_prob,
         'engaged_obs': engaged_observation,
         'delta': delta,
         'V': V_s,
+        'position' : position
     })
     
     learning_gain = max(0,delta) * (1.0 - state.skill)  # skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
     state.skill += (min(learning_gain / stage_amt, 1))
-    return delta, stage_engagement, engaged_observation
+    return delta, engaged_observation, stage_engagement
 
 def simulate(state: ModelState, pers_param):
-    tot_epi_engagement = 0
     stages_completed = 0
     for s in range(stage_amt):
-        state.rpe[s], tot_stage_engagement, engaged = value_of_stage(state, s, pers_param)
-        tot_epi_engagement += tot_stage_engagement
+        state.rpe[s], disengaged, tot_stage_engagement = value_of_stage(state, s, pers_param)
         stages_completed += 1
-        if not engaged and state.t > 1:
-            state.t_since_eng = 0
-            break
+        if disengaged: break
     state.episode_log.append({
         'trial': state.t,
-        'total_engagement': tot_epi_engagement, # will be re engagment factor
         'Stages completed': stages_completed, # how many stages were completed before disengagement
         'max_abs_rpe': max(abs(x) for x in state.rpe.values()),
         'est_f': np.dot(state.weights, state.particle_matrix[0]),
         'est_k': np.dot(state.weights, state.particle_matrix[1]),
         'est_b': np.dot(state.weights, state.particle_matrix[2]),
     })
-    state.t_since_eng += 1 
-    
+    return True if not disengaged else False
 
 def train(state: ModelState, pers_param, debug):
     low_rpe_streak = 0
     while True:
-        simulate(state, pers_param)
+        engaged = simulate(state, pers_param)
 
         max_rpe = max(abs(x) for x in state.rpe.values())
 
@@ -76,24 +72,16 @@ def train(state: ModelState, pers_param, debug):
 
         average_v = sum(V(state.theta, s) for s in range(stage_amt))/stage_amt
         
-        if low_rpe_streak >= 10 and average_v > 0.1:
+        if low_rpe_streak >= 10 and average_v > 0.1 or not engaged or state.t >= 2000:
             if debug:
-                print(f"trained after {state.t} trials")
-                print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
-                print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
+                pass
             return 
 
-        if state.t >= 2000:
-            if debug:
-                print(f"stopped after {state.t} trials")
-                print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
-                print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
-            return 
     
         state.t += 1
         
         
-def test_train(true_f = None, true_k = None, true_b = None, debug = False):
+def test_train(true_f = None, true_k = None, true_b = None, debug = False, extra = False):
     if true_f is None: true_f = random.uniform(0.05, 1.0)
     if true_k is None: true_k = random.uniform(0.05, 1.0)
     if true_b is None: true_b = random.uniform(0.05, 1.0)
@@ -109,15 +97,16 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
         weights = weights,
         particle_matrix = np.random.uniform(0.05, 1.0, size=(3, n_particles)),
         skill = .1,
-        highest_eng = -math.inf,
-        t_since_eng = 0,
     )
 
     train(state, fixed, debug)
     
-    avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log)
+    avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log) if len(state.episode_log) != 0 else 0
+    
     if debug == True:
-        
+        print(f"stopped after {state.t} trials")
+        print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
+        print("RPE:", [round(state.rpe[s], 3) for s in range(stage_amt)])
         print("Estimated f:", np.dot(state.weights, state.particle_matrix[0]))
         print("Estimated k:", np.dot(state.weights, state.particle_matrix[1]))
         print("Estimated b:", np.dot(state.weights, state.particle_matrix[2]))
@@ -127,72 +116,18 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False):
     est_f = np.dot(state.weights, state.particle_matrix[0])
     est_k = np.dot(state.weights, state.particle_matrix[1])
     est_b = np.dot(state.weights, state.particle_matrix[2])
-    return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
-            'est_f': est_f, 'est_k': est_k, 'est_b': est_b}
+    
 
-def collect_results(n=60, repeats=5):
-    results = []
-    sweep = np.linspace(0.05, 0.95, n)
-    fixed = 0.5
+    
+    
+    if not extra:
+        return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
+                'est_f': est_f, 'est_k': est_k, 'est_b': est_b, 'trials': state.t}
+    else:
+        log = state.stage_log
+        return fixed, log, state.t
 
-    for i, val in enumerate(sweep):
-        f_runs = [test_train(val, fixed, fixed) for _ in range(repeats)]
-        k_runs = [test_train(fixed, val, fixed) for _ in range(repeats)]
-        b_runs = [test_train(fixed, fixed, val) for _ in range(repeats)]
-        results.append({'param': 'f', 'true_f': val, 'true_k': fixed, 'true_b': fixed,
-                        'avg_stages': np.mean([r['avg_stages'] for r in f_runs]),
-                        'est_f': np.mean([r['est_f'] for r in f_runs]),
-                        'est_k': np.mean([r['est_k'] for r in f_runs]),
-                        'est_b': np.mean([r['est_b'] for r in f_runs])})
-        results.append({'param': 'k', 'true_f': fixed, 'true_k': val, 'true_b': fixed,
-                        'avg_stages': np.mean([r['avg_stages'] for r in k_runs]),
-                        'est_f': np.mean([r['est_f'] for r in k_runs]),
-                        'est_k': np.mean([r['est_k'] for r in k_runs]),
-                        'est_b': np.mean([r['est_b'] for r in k_runs])})
-        results.append({'param': 'b', 'true_f': fixed, 'true_k': fixed, 'true_b': val,
-                        'avg_stages': np.mean([r['avg_stages'] for r in b_runs]),
-                        'est_f': np.mean([r['est_f'] for r in b_runs]),
-                        'est_k': np.mean([r['est_k'] for r in b_runs]),
-                        'est_b': np.mean([r['est_b'] for r in b_runs])})
-        print(f"completed {i+1}/{n}")
 
-    return results
 
-def plot_results(results):
-    f_sweep = [(r['true_f'], r['avg_stages']) for r in results if r['param'] == 'f']
-    k_sweep = [(r['true_k'], r['avg_stages']) for r in results if r['param'] == 'k']
-    b_sweep = [(r['true_b'], r['avg_stages']) for r in results if r['param'] == 'b']
 
-    f_est = [(r['true_f'], r['est_f']) for r in results if r['param'] == 'f']
-    k_est = [(r['true_k'], r['est_k']) for r in results if r['param'] == 'k']
-    b_est = [(r['true_b'], r['est_b']) for r in results if r['param'] == 'b']
 
-    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-
-    ax1.plot(*zip(*sorted(k_sweep)), color='#FF5722', label='k (effort aversion)')
-    ax1.plot(*zip(*sorted(f_sweep)), color='#2196F3', label='f (progress sensitivity)')
-    ax1.plot(*zip(*sorted(b_sweep)), color='#4CAF50', label='b (boredom rate)')
-    ax1.set_xlabel('Parameter value')
-    ax1.set_ylabel('Average stages completed')
-    ax1.set_title('Parameter vs Engagement')
-    ax1.legend()
-
-    lims = [0.05, 0.95]
-    ax2.plot(lims, lims, 'k--', alpha=0.4, label='ideal recovery')
-    ax2.scatter(*zip(*sorted(f_est)), color='#2196F3', s=15, alpha=0.7, label='est f')
-    ax2.scatter(*zip(*sorted(k_est)), color='#FF5722', s=15, alpha=0.7, label='est k')
-    ax2.scatter(*zip(*sorted(b_est)), color='#4CAF50', s=15, alpha=0.7, label='est b')
-    ax2.set_xlabel('True parameter value')
-    ax2.set_ylabel('Estimated parameter value')
-    ax2.set_title('Parameter Recovery')
-    ax2.set_xlim(lims)
-    ax2.set_ylim(lims)
-    ax2.legend()
-
-    plt.tight_layout()
-
-    plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
-    plt.show()
-
-#plot_results(collect_results(60,5))
-test_train(0.9, debug=True)
