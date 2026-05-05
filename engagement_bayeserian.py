@@ -2,26 +2,32 @@ import random
 import math
 import numpy as np
 from config import *
+from scipy.integrate import nsum    
 
 def ddm(f_val, k_val, b_val, delta, s, state: ModelState, prob = False):
-    boundary = 1/k_val
+    boundary = (1-b_val)*4
+    startpos = k_val * 2
+    
     dt = 1/stage_amt
     decay_rate = 0.3 
     if state.t > 1:
         delta = state.stage_log[(state.t-1)*stage_amt-1]['delta'] * math.exp(-decay_rate * s)
     
     dW = random.gauss() * math.sqrt(dt) # noise * tiny change in time
-    sigma = .1
+    sigma = .01
     
-    boredom = b_val * math.log1p(state.t)
-    reward_signal = f_val * delta 
+    fatigue = .3 * math.log1p(state.t)
+    reward_signal = 10*(f_val * delta)
     
-    drift_rate = boredom - reward_signal
+    
+    drift_rate = fatigue - reward_signal
     time = state.t + dt*s
-    try: position = state.stage_log[state.t+s -1]['position'] + drift_rate*dt + sigma*dW
-    except: position = 0 + drift_rate*dt + sigma*dW
+    if s > 0 and len(state.stage_log) > 0:
+        position = state.stage_log[-1]['position'] + drift_rate*dt + sigma*dW
+    else:
+        position = startpos + drift_rate*dt + sigma*dW
     if prob:
-        return boundary, sigma, drift_rate
+        return boundary, sigma, drift_rate, startpos
     elif position < boundary:
         return time, False, position
     elif position >= boundary:
@@ -29,18 +35,31 @@ def ddm(f_val, k_val, b_val, delta, s, state: ModelState, prob = False):
         return time, True, position
     
 def formula(f_val, k_val, b_val, s, delta, state: ModelState):
-    startpos = 0
-    boundary, sigma, drift_rate = ddm(f_val, k_val, b_val, delta, s, state, prob = True)
-    prob = (boundary - startpos)/(sigma*(math.sqrt(2*math.pi*state.t**3)))*math.exp(-(boundary-startpos-drift_rate*state.t)**2/2*(sigma**2)*state.t)
+    time = state.t + (s / stage_amt)
+    boundary, sigma, drift, startpos = ddm(f_val, k_val, b_val, delta, s, state, prob=True)
 
-    
+    mask = time < (0.5 * boundary**2) / (np.pi**2)
 
-def bayesian_particle_update(engaged, delta, v, state: ModelState):
+    exponent = -(drift * startpos * boundary) - (drift**2 * time) / 2
+    K = 20
+    k = np.arange(-K, K + 1).reshape(-1, 1)
+    small_terms = (2 * boundary * k + startpos) * np.exp(-((2 * boundary * k + startpos)**2) / (2 * time))
+    small_summ = small_terms.sum(axis=0)
+    small_result = (boundary / np.sqrt(2 * np.pi * time**3)) * np.exp(exponent) * small_summ
 
-    scores = formula(state.particle_matrix[0], state.particle_matrix[1], state.particle_matrix[2], delta, state)
+    k = np.arange(1, K + 1).reshape(-1, 1)
+    large_terms = k * np.sin(k * np.pi * startpos) * np.exp(-(k**2 * np.pi**2 * time) / (2 * boundary**2))
+    large_summ = large_terms.sum(axis=0)
+    large_result = (np.pi / boundary**2) * np.exp(exponent) * large_summ
 
-    probs: np.ndarray = sigmoid(scores)
-    likelihoods = probs if engaged else (1 - probs)
+    return np.where(mask, small_result, large_result)
+        
+
+def bayesian_particle_update(disengaged, delta, s, state: ModelState):
+
+    probs = formula(state.particle_matrix[0], state.particle_matrix[1], state.particle_matrix[2], s, delta, state)
+
+    likelihoods = probs if not disengaged else (1 - probs)
 
     new_weights = state.weights * np.maximum(likelihoods, 1e-8)
     total = new_weights.sum()

@@ -14,12 +14,15 @@ param_values = {
     'd' : diff,
 } 
 
+
+
 @dataclass
 class UserParams:
     f: float  # Sensitivity to learning progress  
     k: float  # Effort aversion  
     b: float  # Boredom rate 
-
+    
+    
 @dataclass
 class ModelState:
     theta: np.ndarray
@@ -47,9 +50,5 @@ def phi(s: int):
     return np.array([1.0, d, s_norm])
 
 def V(theta, s):
-
     v = float((theta @ phi(s)))
     return v
-
-def smoothstep(x):
-    return (3*x**2) - (2*x**3)

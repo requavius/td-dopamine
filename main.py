@@ -5,8 +5,10 @@
 # Functions: 1: Particle Filter(no value arg), 2: Single DDM(Weiner process), 3: terminal stats for one run, 4: Multiple DDMs(no value arg)
 # main.py --function 2 --value 0.1,0.1,0.1
 
+import math
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 from dataclasses import asdict
 from temporal_difference_model import test_train
 import argparse
@@ -98,17 +100,29 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-def plotweiner(f,k,b):
-    fixed, log, t = test_train(f,k,b, debug=False, extra=True)
-    x = [ep['dt'] for ep in log]
-    y = [ep['position'] for ep in log]
-    plt.plot(x,y,color='#FF5722')
+def plotweiner(f, k, b):
+    fixed, log, t = test_train(f, k, b, debug=False, extra = 1)
+    boundary = (1 - fixed.b) * 4
+
+    x_traj = [ep['dt'] for ep in log]
+    y_traj = [ep['position'] for ep in log]
     
-    plt.axhline(y=1/fixed.k, color="#000000", linestyle='-', linewidth=2,alpha=1)
-    plt.xlabel("time")
-    plt.ylabel("position")
-    params = {k: round(v, 2) for k, v in asdict(fixed).items()}
-    plt.title(f"scatter for {t} trials\nTrue Params: {params}")
+    avg_delta = np.mean([ep['delta'] for ep in log])
+    sigma_ddm = 0.1
+
+    params_str = {pk: round(pv, 2) for pk, pv in asdict(fixed).items()}
+    fig = plt.figure(figsize=(14, 6))
+    fig.suptitle(f"True Params: {params_str}  |  {t} trials")
+
+    ax1 = fig.add_subplot(1, 2, 1)
+    ax1.plot(x_traj, y_traj, color='#FF5722', linewidth=0.6, alpha=0.7)
+    ax1.axhline(y=boundary, color='k', linewidth=2, label='boundary)')
+    ax1.set_xlabel("time")
+    ax1.set_ylabel("position")
+    ax1.set_title("Wiener process")
+    ax1.legend()
+
+    plt.tight_layout()
     plt.show()
 def multiweiner(repeats=10):
     values = [0.1, 0.5, 0.9]
@@ -119,18 +133,17 @@ def multiweiner(repeats=10):
     _, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     for ax, (param_label, run_fn) in zip(axes, [
-        ('f', lambda v: test_train(v, fixed, fixed, extra=True)),
-        ('k', lambda v: test_train(fixed, v, fixed, extra=True)),
-        ('b', lambda v: test_train(fixed, fixed, v, extra=True)),
+        ('f', lambda v: test_train(v, fixed, fixed, extra = 1)),
+        ('k', lambda v: test_train(fixed, v, fixed, extra = 1)),
+        ('b', lambda v: test_train(fixed, fixed, v, extra = 1)),
     ]):
         drawn_labels = set()
         for val, color in zip(values, colors):
             for _ in range(repeats):
                 fixed_params, log, _ = run_fn(val)
-                boundary = 1 / fixed_params.k
+                boundary = (1-fixed_params.b)*4
                 positions = [ep['position'] for ep in log]
 
-                # trim to first boundary crossing so every line ends at the boundary
                 cross = next((i for i, p in enumerate(positions) if p >= boundary), len(positions) - 1)
                 traj = positions[:cross + 1]
 
@@ -150,9 +163,23 @@ def multiweiner(repeats=10):
     
 
     plt.tight_layout()
-    plt.savefig('multiweiner_frozen_0.5.png', dpi=150, bbox_inches='tight')
+    plt.savefig('multiweiner_frozen_05.png', dpi=150, bbox_inches='tight')
     plt.show()
 
+def particlesovertime(f,k,b):
+    data = test_train(f,k,b, False, 2, 5)
+    colors = {'f': "#FF0000", 'k': "#2200FF", 'b': "#00FF4C"}
+    x = sorted(data.keys())
+
+    for key, color in colors.items():
+        y = [data[xi][key] for xi in x]
+        plt.plot(x, y, marker='o', label=key, color=color)
+
+    plt.xlabel('Trial Num')
+    plt.ylabel('Value')
+    plt.legend()
+    plt.title('')
+    plt.show()
 
 def run():
     f = k = b = choose = None
@@ -162,12 +189,12 @@ def run():
     if args.function == '4':
         multiweiner()
         quit()
-    if args.function != '1':
+    if args.function != '1' or '4':
         params = args.values if args.values else ''
         if params != "": f,k,b = map(float, params.split(","))
-        choose = str(int(args.function) - 1)
-        if choose == "1": plotweiner(f,k,b)
-        else: test_train(f,k,b, debug=True)
+        if args.function == "2": plotweiner(f,k,b)
+        if args.function == "3": test_train(f,k,b, debug=True)
+        if args.function == "5": particlesovertime(f,k,b)
     else:
         test_train(f,k,b, debug=True)
 run()
