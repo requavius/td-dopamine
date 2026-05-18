@@ -4,7 +4,7 @@
 # Function 3 and no function arg are the same
 # Functions: 1: Particle Filter(no value arg), 2: Single DDM(Weiner process), 3: terminal stats for one run, 4: Multiple DDMs(no value arg)
 # main.py --function 2 --value 0.1,0.1,0.1
-
+import pyddm, pyddm.plot
 import math
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,7 +14,7 @@ from temporal_difference_model import test_train
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--function", default="3")
+parser.add_argument("--function", default="1")
 parser.add_argument("--values")
 args = parser.parse_args()
 
@@ -28,21 +28,18 @@ def collect_results(n=60, repeats=5):
         k_runs = [test_train(fixed, val, fixed) for _ in range(repeats)]
         b_runs = [test_train(fixed, fixed, val) for _ in range(repeats)]
         results.append({'param': 'f', 'true_f': val, 'true_k': fixed, 'true_b': fixed,
-                        'avg_stages': np.mean([r['avg_stages'] for r in f_runs]),
                         'avg_trials': np.mean([r['trials'] for r in f_runs]),
                         'est_f': np.mean([r['est_f'] for r in f_runs]),
                         'est_k': np.mean([r['est_k'] for r in f_runs]),
                         'est_b': np.mean([r['est_b'] for r in f_runs]),
                         })
         results.append({'param': 'k', 'true_f': fixed, 'true_k': val, 'true_b': fixed,
-                        'avg_stages': np.mean([r['avg_stages'] for r in k_runs]),
                         'avg_trials': np.mean([r['trials'] for r in k_runs]),
                         'est_f': np.mean([r['est_f'] for r in k_runs]),
                         'est_k': np.mean([r['est_k'] for r in k_runs]),
                         'est_b': np.mean([r['est_b'] for r in k_runs]),
                         })
         results.append({'param': 'b', 'true_f': fixed, 'true_k': fixed, 'true_b': val,
-                        'avg_stages': np.mean([r['avg_stages'] for r in b_runs]),
                         'avg_trials': np.mean([r['trials'] for r in b_runs]),
                         'est_f': np.mean([r['est_f'] for r in b_runs]),
                         'est_k': np.mean([r['est_k'] for r in b_runs]),
@@ -53,9 +50,6 @@ def collect_results(n=60, repeats=5):
     return results
 
 def plot_results(results):
-    f_sweep = [(r['true_f'], r['avg_stages']) for r in results if r['param'] == 'f']
-    k_sweep = [(r['true_k'], r['avg_stages']) for r in results if r['param'] == 'k']
-    b_sweep = [(r['true_b'], r['avg_stages']) for r in results if r['param'] == 'b']
 
     f_est = [(r['true_f'], r['est_f']) for r in results if r['param'] == 'f']
     k_est = [(r['true_k'], r['est_k']) for r in results if r['param'] == 'k']
@@ -65,15 +59,7 @@ def plot_results(results):
     k_sweept = [(r['true_k'], r['avg_trials']) for r in results if r['param'] == 'k']
     b_sweept = [(r['true_b'], r['avg_trials']) for r in results if r['param'] == 'b']
 
-    _, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
-
-    ax1.plot(*zip(*sorted(k_sweep)), color='#FF5722', label='k (effort aversion)')
-    ax1.plot(*zip(*sorted(f_sweep)), color='#2196F3', label='f (progress sensitivity)')
-    ax1.plot(*zip(*sorted(b_sweep)), color='#4CAF50', label='b (boredom rate)')
-    ax1.set_xlabel('Parameter value')
-    ax1.set_ylabel('Average stages completed')
-    ax1.set_title('Parameter vs Engagement')
-    ax1.legend()
+    _, (ax2, ax3) = plt.subplots(1, 2, figsize=(12, 6))
 
     lims = [0.05, 0.95]
     ax2.plot(lims, lims, 'k--', alpha=0.4, label='ideal recovery')
@@ -100,72 +86,6 @@ def plot_results(results):
     plt.savefig('engagement_by_params.png', dpi=150, bbox_inches='tight')
     plt.show()
 
-def plotweiner(f, k, b):
-    fixed, log, t = test_train(f, k, b, debug=False, extra = 1)
-    boundary = (1 - fixed.b) * 4
-
-    x_traj = [ep['dt'] for ep in log]
-    y_traj = [ep['position'] for ep in log]
-    
-    avg_delta = np.mean([ep['delta'] for ep in log])
-    sigma_ddm = 0.1
-
-    params_str = {pk: round(pv, 2) for pk, pv in asdict(fixed).items()}
-    fig = plt.figure(figsize=(14, 6))
-    fig.suptitle(f"True Params: {params_str}  |  {t} trials")
-
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax1.plot(x_traj, y_traj, color='#FF5722', linewidth=0.6, alpha=0.7)
-    ax1.axhline(y=boundary, color='k', linewidth=2, label='boundary)')
-    ax1.set_xlabel("time")
-    ax1.set_ylabel("position")
-    ax1.set_title("Wiener process")
-    ax1.legend()
-
-    plt.tight_layout()
-    plt.show()
-def multiweiner(repeats=10):
-    values = [0.1, 0.5, 0.9]
-    colors = ['#2196F3', '#FF5722', '#4CAF50']
-    fixed = 0.5
-    param_names = ['f (progress sensitivity)', 'k (effort aversion)', 'b (boredom rate)']
-
-    _, axes = plt.subplots(1, 3, figsize=(18, 6))
-
-    for ax, (param_label, run_fn) in zip(axes, [
-        ('f', lambda v: test_train(v, fixed, fixed, extra = 1)),
-        ('k', lambda v: test_train(fixed, v, fixed, extra = 1)),
-        ('b', lambda v: test_train(fixed, fixed, v, extra = 1)),
-    ]):
-        drawn_labels = set()
-        for val, color in zip(values, colors):
-            for _ in range(repeats):
-                fixed_params, log, _ = run_fn(val)
-                boundary = (1-fixed_params.b)*4
-                positions = [ep['position'] for ep in log]
-
-                cross = next((i for i, p in enumerate(positions) if p >= boundary), len(positions) - 1)
-                traj = positions[:cross + 1]
-
-                label = f'{param_label}={val}' if val not in drawn_labels else None
-                ax.plot(traj, color=color, alpha=0.4, linewidth=0.9, label=label)
-                drawn_labels.add(val)
-
-            ax.axhline(y=boundary, color=color, linestyle='--', linewidth=1.5, alpha=0.7)
-
-        ax.set_xlabel('stage step')
-        ax.set_ylabel('position')
-        ax.legend()
-
-    axes[0].set_title(param_names[0])
-    axes[1].set_title(param_names[1])
-    axes[2].set_title(param_names[2])
-    
-
-    plt.tight_layout()
-    plt.savefig('multiweiner_frozen_05.png', dpi=150, bbox_inches='tight')
-    plt.show()
-
 def particlesovertime(f,k,b):
     data = test_train(f,k,b, False, 2, 5)
     colors = {'f': "#FF0000", 'k': "#2200FF", 'b': "#00FF4C"}
@@ -182,19 +102,16 @@ def particlesovertime(f,k,b):
     plt.show()
 
 def run():
-    f = k = b = choose = None
-    if args.function == '1':
+    f = k = b = None
+    if args.function == '3':
         plot_results(collect_results(60,5))
         quit()
-    if args.function == '4':
-        multiweiner()
-        quit()
-    if args.function != '1' or '4':
+    if args.function == "1" or "2":
         params = args.values if args.values else ''
         if params != "": f,k,b = map(float, params.split(","))
-        if args.function == "2": plotweiner(f,k,b)
-        if args.function == "3": test_train(f,k,b, debug=True)
-        if args.function == "5": particlesovertime(f,k,b)
+        if args.function == "1": 
+            test_train(f,k,b, debug=True)
+        if args.function == "2": particlesovertime(f,k,b)
     else:
         test_train(f,k,b, debug=True)
 run()

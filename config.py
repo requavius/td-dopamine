@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 import numpy as np
 import math
+import pandas as pd
 
 g = .9 
 a =.05
@@ -30,9 +31,11 @@ class ModelState:
     weights: np.ndarray
     skill: float  # initial preformance that will scale
     particle_matrix: np.ndarray
+    first_passage: pd.DataFrame
     stage_log: list = field(default_factory=list)
     episode_log: list = field(default_factory=list)
     rpe: dict = field(default_factory=lambda: {r: 0 for r in range(stage_amt)})
+    
 
 def get_sigma(state: ModelState, base_sigma=.02, scaling_factor=.3):
     raw_sigma = base_sigma + diff * scaling_factor + 0.1

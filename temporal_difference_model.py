@@ -1,10 +1,7 @@
-import numpy as np
-import random
-import math
-import matplotlib.pyplot as plt
 from engagement_bayeserian import *
 from config import *
-
+from ddm import *
+import random
 
 def value_of_stage(state: ModelState, s, pers_param):
     V_s = V(state.theta, s)
@@ -13,51 +10,36 @@ def value_of_stage(state: ModelState, s, pers_param):
         reward_divergence = random.gauss(0, sigma)
         r = sigmoid(5 * (state.skill - diff)) + reward_divergence
         r = max(0, min(1, r))
-        #r = 1
         V_next = 0.0
     else:
         r, V_next = 0.0, V(state.theta, s+1)
 
     delta = r + g * V_next - V_s
     state.theta = state.theta + a * delta * phi(s)
-    dt, engaged_observation, position = ddm( pers_param.f, pers_param.k, pers_param.b, delta, s, state) 
-    stage_engagement = formula( pers_param.f, pers_param.k, pers_param.b, delta, s, state) 
-    state.weights = bayesian_particle_update(engaged_observation, delta, s, state)
-    resample_if_needed(state)
-
+    model, dt = ddm(delta, s, state, pers_param.f, pers_param.k, pers_param.b) 
+    chance = random.random()
+    disengaged = False if model < chance else True
+    
     state.stage_log.append({
         'trial': state.t,
         'stage': s,
         'dt': dt,
-        # 'engagement_score': stage_engagement,
-        # 'engagement_prob': engagment_prob,
-        'engaged_obs': engaged_observation,
         'delta': delta,
         'V': V_s,
-        'position' : position
     })
     
     learning_gain = max(0,delta) * (1.0 - state.skill)  # skill grows with practice but saturates. This might be changed based on what makes sense for skill improvment
     state.skill += (min(learning_gain / stage_amt, 1))
-    return delta, engaged_observation
+    return delta, disengaged
 
 def simulate(state: ModelState, pers_param):
-    stages_completed = 0
     for s in range(stage_amt):
         state.rpe[s], disengaged = value_of_stage(state, s, pers_param)
-        stages_completed += 1
         if disengaged: break
-    state.episode_log.append({
-        'trial': state.t,
-        'Stages completed': stages_completed, # how many stages were completed before disengagement
-        'max_abs_rpe': max(abs(x) for x in state.rpe.values()),
-        'est_f': np.dot(state.weights, state.particle_matrix[0]),
-        'est_k': np.dot(state.weights, state.particle_matrix[1]),
-        'est_b': np.dot(state.weights, state.particle_matrix[2]),
-    })
+    state.first_passage[len(state.first_passage)] = [disengaged, state.t, [state.rpe[s] for s in range(stage_amt)]]
     return True if not disengaged else False
 
-def train(state: ModelState, pers_param, debug, i):
+def train(state: ModelState, pers_param, debug):
     low_rpe_streak = 0
     while True:
         engaged = simulate(state, pers_param)
@@ -88,24 +70,19 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False, extra
     
     fixed = UserParams(f=true_f, k=true_k, b=true_b)
     n_particles = 100
-    weights = np.ones(n_particles) / n_particles
-    theta = np.zeros(len(param_values) + 1)
-
+    cols = ['Engagment', 'Engaged T', 'Delta']
     state = ModelState(
-        theta = theta,
+        theta = np.zeros(len(param_values) + 1),
         t = 1,
-        weights = weights,
-        particle_matrix = np.random.uniform(0.05, 1.0, size=(3, n_particles)),
+        weights = np.ones(n_particles) / n_particles,
+        particle_matrix = np.random.uniform(0.05, 1.0, size = (3, n_particles)),
         skill = .1,
+        first_passage = pd.DataFrame(columns = cols)
     )
 
     for i in range(repeat):
-        train(state, fixed, debug, i)
+        train(state, fixed, debug)
         repeats[i] = {'f' : np.dot(state.weights, state.particle_matrix[0]), 'k' : np.dot(state.weights, state.particle_matrix[1]), 'b' : np.dot(state.weights, state.particle_matrix[2])}
-    
-        
-    avg_stages = sum(ep['Stages completed'] for ep in state.episode_log) / len(state.episode_log) if len(state.episode_log) != 0 else 0
-    
     if debug == True:
         print(f"stopped after {state.t} trials")
         print("V:", [round(V(state.theta, s), 3) for s in range(stage_amt)])
@@ -113,7 +90,6 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False, extra
         print("Estimated f:", np.dot(state.weights, state.particle_matrix[0]))
         print("Estimated k:", np.dot(state.weights, state.particle_matrix[1]))
         print("Estimated b:", np.dot(state.weights, state.particle_matrix[2]))
-        print(f"Average stages completed per episode: {avg_stages:.2f}")
         print("True params:", fixed)
     
     est_f = np.dot(state.weights, state.particle_matrix[0])
@@ -124,14 +100,13 @@ def test_train(true_f = None, true_k = None, true_b = None, debug = False, extra
     
     
     if not extra:
-        return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b, 'avg_stages': avg_stages,
+        return {'true_f': true_f, 'true_k': true_k, 'true_b': true_b,
                 'est_f': est_f, 'est_k': est_k, 'est_b': est_b, 'trials': state.t}
     elif extra == 1:
         log = state.stage_log
         return fixed, log, state.t
     elif extra == 2:
         return repeats
-
 
 
 
