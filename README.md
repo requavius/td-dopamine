@@ -1,187 +1,120 @@
-# V(0) Linear Function Approximate Model for Engagement
+# TD(0) Reinforcement Learning with Bayesian Inference of Motivational Parameters
 
-## Objective
+A computational model that infers latent motivational parameters from observed engagement behavior. The system combines temporal difference learning over a staged task with a drift diffusion model of disengagement, then uses a particle filter to recover the motivational parameters that generated the observed choices.
 
-The objective of this model is to infer latent motivational parameters from observed engagement behavior and use those estimates to adapt task parameters in order to maintain learner engagement. The guiding hypothesis is that engagement can be sustained by regulating reward prediction error (RPE) within a range that signals meaningful learning progress without excessive effort cost.
-
-The model is structured as a generative behavioral model coupled with an online inference procedure.
+This is an active research project. Not all components are validated/implemented.
 
 ---
 
-## Generative Model
+## Scientific Motivation
 
-The system models a learner interacting with a staged task environment. At each stage the learner decides whether to continue or disengage. Decisions arise from latent motivational parameters that shape how learning signals and effort costs influence engagement.
+The guiding question is whether a small set of latent parameters can explain why a learner disengages from a task at a particular moment. The model treats each disengagement decision as a noisy sample from a generative process driven by three quantities:
 
-The generative process is:
+- **f**, sensitivity to reward prediction error (progress signal)
+- **k**, effort aversion (cost signal)
+- **b**, boredom rate (time-dependent decay)
 
-1. A learner with latent parameters interacts with the environment.
-2. The learner experiences prediction errors during value learning.
-3. Prediction errors influence a latent engagement signal.
-4. The engagement signal determines the probability of continuing the task.
-5. A stochastic decision generates the observed behavior.
-
-Observed behavior consists only of binary continuation decisions at each stage.
+If these parameters can be recovered from behavior alone, the same framework can be inverted to adapt task difficulty in real time to keep a learner inside their productive range.
 
 ---
 
-## Model Structure
+## Architecture
 
-The system is divided into three components:
+The model has three layers.
 
-- environment
-- agent
-- inference
+### 1. Environment
 
----
+A staged task. Each episode has a fixed number of stages (`stage_amt`, default 4) with constant baseline difficulty (`diff`). Reward is delivered only at the terminal stage and depends on the learner's skill relative to task difficulty, with Gaussian noise scaled inversely by skill.
 
-## Environment
+### 2. Agent
 
-The environment defines the staged learning task.
+The agent learns stage values using TD(0) with linear function approximation.
 
-- Episodes consist of a fixed number of stages.
-- Each stage has an associated difficulty level.
-- Rewards occur at the final stage of an episode.
-- Task difficulty influences both reward probability and effort cost.
-
-State representation includes:
-
-- stage index
-- task difficulty
-- normalized stage position
-
-Reward at the final stage is determined by the learner's skill relative to task difficulty, with stochastic noise.
-
----
-
-## Agent
-
-The agent learns stage values and generates engagement behavior.
-
-### Value Learning
-
-Stage values are approximated using linear function approximation.
-
-Value function:
-
+```
 V(s) = θ · φ(s)
-
-Feature vector:
-
-- bias term
-- task difficulty
-- normalized stage position
-
-Weights are updated using the TD(0) update rule:
-
-θ ← θ + α δ φ(s)
-
-where
-
+φ(s) = [1, difficulty, normalized_stage_position]
 δ = r + γ V(s+1) − V(s)
+θ ← θ + α δ φ(s)
+```
 
-The prediction error δ acts as a proxy for reward prediction error.
+Skill grows with positive prediction errors and saturates as it approaches one.
 
-### Skill Dynamics
+### 3. Engagement policy (drift diffusion model)
 
-Skill represents the learner's competence at the task.
+At each stage, the probability of continuing versus disengaging is determined by a DDM whose parameters are functions of the latent motivational variables:
 
-- Skill increases when positive prediction errors occur.
-- Growth saturates as skill approaches a maximum.
-- Skill influences reward probability and effort cost.
+- **Drift rate**: a function of f, the current prediction error δ, and a time-dependent fatigue term `log1p(0.3 · t)`. Higher f tilts drift toward continuation.
+- **Boundary**: `(1 − b) · stage_amt`. Higher boredom rate shrinks the decision boundary, accelerating disengagement.
+- **Starting position**: `k · stage_amt / 10`. Higher effort aversion starts the accumulator closer to the disengagement boundary.
 
-### Motivational Parameters
+The DDM is solved per stage using `pyddm`, and the resulting probability of continuation is compared to a uniform draw to generate the observed binary decision.
 
-Each individual is characterized by three latent parameters.
+### 4. Inference 
 
-- f : sensitivity to learning progress
-- k : effort aversion
-- b : boredom rate
-
-These parameters determine how prediction errors and task costs influence engagement.
-
-### Engagement Policy -- Drift Diffusion Model (DDM)
-
-The DDM models the probability distribution of disengagement over time.
-
-Movement towards a disengagment descision over time is governed by the parameters.
-
-- Drift rate (f) : Speed of reaching a decision 
-
----
-
-## Inference
-
-Latent motivational parameters are inferred from observed behavior using sequential Bayesian inference.
-
-### Particle Representation
-
-The posterior distribution over parameters is approximated using a particle filter.
-
-Each particle represents a candidate parameter set:
-
-(f, k, b)
-
-Particles maintain weights proportional to how well they explain observed engagement decisions.
-
-### Likelihood
-
-For each particle the model computes the probability of the observed engagement decision given its parameters.
-
-P(behavior | parameters)
-
-Weights are updated using Bayes' rule:
-
-w_i ← w_i * likelihood_i
-
-Weights are then normalized.
-
-### Resampling
-
-Effective sample size is monitored to detect particle degeneracy.
-
-When particle diversity falls below a threshold:
-
-- particles are resampled according to their weights
-- small Gaussian noise is added to maintain exploration
-
----
-
-## Validation
-
-Parameter sweeps show:
-
-- increasing effort aversion decreases stages completed
-- increasing boredom rate decreases stages completed
-- increasing sensitivity to learning progress increases stages completed
-- ![](assets/20260314_035525_image.png)
-
----
-
-## Planned Extensions
-
-Several components remain to be implemented.
-
-- a closed loop controller that modifies task parameters based on inferred motivational parameters
-- a scheduling mechanism that detects convergence of the value function
-- a policy for adapting difficulty, stage count, or pacing based on estimated parameters
-- integration with real behavioral data rather than simulated agents
+Parameters are inferred using PyDDM's model.fit() function. Highly optimized code to solve the Fokker-Planck equation for the first passage time distrobution.
 
 ---
 
 ## Files
 
-- temporal_difference_model.py
-  Full implementation of the environment, agent, and particle filter inference system.
-- engagement_by_params.png
-  Visualization of parameter sweeps showing the relationship between motivational parameters and engagement behavior.
+| File | Purpose |
+|---|---|
+| `main.py` |File to get data |
+| `temporal_difference_model.py` | Agent, environment, and training loop. |
+| `ddm.py` | Drift diffusion model definition and per-stage solve. |
+| `engagement_bayeserian.py` | Particle filter weight update and resampling. |
+| `config.py` | Hyperparameters, dataclasses (`UserParams`, `ModelState`), feature map. |
+| `requirements.txt` | Python dependencies. |
+| `assets/` | Generated figures. |
 
 ---
 
-## Configuration
+## Running
 
-Task parameters can be modified through the following variables.
+```bash
+pip install -r requirements.txt
+```
 
-- stage_amt
-  number of stages per episode
-- diff
-  baseline task difficulty
+```bash
+# Single run, print recovered parameters vs. ground truth
+python main.py --function 1 --values 0.3,0.7,0.2
+
+# Single run, plot particle weights over trials
+python main.py --function 2 --values 0.3,0.7,0.2
+
+# Full parameter sweep with recovery and engagement plots
+python main.py --function 3
+```
+
+Values are three comma separated floats in [0, 1] corresponding to (f, k, b). If omitted, parameters are randomized.
+
+---
+
+## Validation
+
+Parameter sweeps over each of f, k, and b (holding the others at 0.5) reproduce the predicted directional effects:
+
+- Increasing f increases the number of stages completed before disengagement.
+- Increasing k decreases stages completed.
+- Increasing b decreases stages completed.
+
+![Parameter sweeps](engagement_by_params.png)
+
+Parameter recovery is currently noisy. The DDM has known identifiability issues: drift, boundary, and starting position interact to produce relatively flat likelihood surfaces, so distinct parameter combinations can generate near-identical engagement distributions. This is the active problem.
+
+---
+
+## Known Limitations
+
+- **Identifiability.** The current parametrization of the DDM does not uniquely determine (f, k, b) from engagement-duration data alone. Fisher information diagnostics on the recovered posterior are the next planned step.
+- **Per-stage DDM solve.** Each stage triggers a full numerical solve of the diffusion process, which dominates runtime. A closed-form first-passage time approximation would be substantially faster.
+- **Simulated agents only.** The model has not been fit to real behavioral data.
+
+---
+
+## Planned Extensions
+
+- Fisher information matrix analysis to diagnose unidentifiable parameter combinations and inform reparametrization.
+- A closed-loop controller that uses the inferred (f, k, b) to adapt stage count, difficulty, or pacing.
+- Fitting to real engagement data once a behavioral dataset is in place.
+- Particle Filter not currently in use. Will be repurposed to find temporal difference parameters to estimate delta values the DDM depends on from real data.
