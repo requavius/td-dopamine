@@ -20,7 +20,7 @@ If these parameters can be recovered from behavior alone, the same framework can
 
 ## Architecture
 
-The model has three layers.
+The model has three generative layers (environment, agent, engagement policy) plus an inference step that inverts them.
 
 ### 1. Environment
 
@@ -43,15 +43,16 @@ Skill grows with positive prediction errors and saturates as it approaches one.
 
 At each stage, the probability of continuing versus disengaging is determined by a DDM whose parameters are functions of the latent motivational variables:
 
-- **Drift rate**: a function of f, the current prediction error δ, and a time-dependent fatigue term `log1p(0.3 · t)`. Higher f tilts drift toward continuation.
-- **Boundary**: `(1 − b) · stage_amt`. Higher boredom rate shrinks the decision boundary, accelerating disengagement.
+- **Drift rate**: `log1p(0.3 · t) − log1p(10 · f · δ)`. A time-dependent fatigue term pushes the accumulator toward disengagement, while the reward signal (scaled by f and the prediction error δ) pulls it back toward continuation. Higher f tilts drift toward continuation.
+- **Noise**: fixed at 0.5.
+- **Boundary**: `(1 − b) · 5`. Higher boredom rate shrinks the decision boundary, accelerating disengagement.
 - **Starting position**: `k · stage_amt / 10`. Higher effort aversion starts the accumulator closer to the disengagement boundary.
 
-The DDM is solved per stage using `pyddm`, and the resulting probability of continuation is compared to a uniform draw to generate the observed binary decision.
+The prediction error fed to the DDM is decayed across stages as `δ · exp(−0.3 · s)`, so later stages carry less of the reward signal. The DDM is solved per stage using `pyddm`, and the resulting probability of continuation is compared to a uniform draw to generate the observed binary decision.
 
-### 4. Inference 
+### 4. Inference
 
-Parameters are inferred using PyDDM's model.fit() function. Highly optimized code to solve the Fokker-Planck equation for the first passage time distrobution.
+Parameters are inferred using PyDDM's `Model.fit()`. It solves the Fokker-Planck equation for the first-passage-time distribution and fits (f, k, b) — bounded to [0, 1] — by differential evolution over the accumulated per-stage engagement samples.
 
 ---
 
@@ -59,11 +60,11 @@ Parameters are inferred using PyDDM's model.fit() function. Highly optimized cod
 
 | File | Purpose |
 |---|---|
-| `main.py` |File to get data |
-| `temporal_difference_model.py` | Agent, environment, and training loop. |
-| `ddm.py` | Drift diffusion model definition and per-stage solve. |
-| `engagement_bayeserian.py` | Particle filter weight update and resampling. |
-| `config.py` | Hyperparameters, dataclasses (`UserParams`, `ModelState`), feature map. |
+| `main.py` | CLI entry point: single runs, per-trial recovery plots, and the parallel parameter sweep. |
+| `temporal_difference_model.py` | Agent, environment, training loop, and the `test_train` driver that fits parameters. |
+| `ddm.py` | Drift diffusion model definition, per-stage solve, and PyDDM fitting. |
+| `engagement_bayeserian.py` | Particle filter weight update and resampling (currently unused; see Known Limitations). |
+| `config.py` | Hyperparameters, dataclasses (`UserParams`, `ModelState`), feature map, drift function. |
 | `requirements.txt` | Python dependencies. |
 | `assets/` | Generated figures. |
 
@@ -79,14 +80,17 @@ pip install -r requirements.txt
 # Single run, print recovered parameters vs. ground truth
 python main.py --function 1 --values 0.3,0.7,0.2
 
-# Single run, plot particle weights over trials
+# Single run, plot estimated (f, k, b) across repeated fits
 python main.py --function 2 --values 0.3,0.7,0.2
 
 # Full parameter sweep with recovery and engagement plots
 python main.py --function 3
+
+# Run the sweep serially (default: all CPU cores)
+python main.py --function 3 --workers 1
 ```
 
-Values are three comma separated floats in [0, 1] corresponding to (f, k, b). If omitted, parameters are randomized.
+`--values` is three comma separated floats in [0, 1] corresponding to (f, k, b); if omitted, parameters are randomized. `--function 3` runs a full sweep and ignores `--values`. `--workers` controls how many processes the sweep uses (defaults to `os.cpu_count()`, `1` = serial).
 
 ---
 
@@ -98,7 +102,7 @@ Parameter sweeps over each of f, k, and b (holding the others at 0.5) reproduce 
 - Increasing k decreases stages completed.
 - Increasing b decreases stages completed.
 
-![Parameter sweeps](engagement_by_params.png)
+![Parameter sweeps](assets/engagement_by_params.png)
 
 Parameter recovery is currently noisy. The DDM has known identifiability issues: drift, boundary, and starting position interact to produce relatively flat likelihood surfaces, so distinct parameter combinations can generate near-identical engagement distributions. This is the active problem.
 

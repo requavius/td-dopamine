@@ -1,7 +1,9 @@
-from config import ModelState, np, config, drift_rate
-import pandas as pd
 import logging
+
+import pandas as pd
 import pyddm
+
+from config import ModelState, drift_rate, np
 
 logging.getLogger("pyddm").setLevel(logging.WARNING)
 
@@ -12,44 +14,49 @@ def effective_delta(delta, s, decay_rate=0.3):
     return delta * np.exp(-decay_rate * s)
 
 
-class ddm:
-    def modelsolve(delta, s, state: ModelState, f_val, k_val, b_val):
-        dt = 1 / config.stage_amt
-        eff_delta = effective_delta(delta, s)
-        model = pyddm.gddm(
-            drift=drift_rate,
-            noise=0.5,
-            bound=lambda b_val: (1 - b_val) * 5,
-            starting_position=lambda k_val: k_val * config.stage_amt / 10,
-            T_dur=dt,
-            parameters={"f_val": f_val, "k_val": k_val, "b_val": b_val},
-            conditions=["delta"],
-        )
-        sol = model.solve(conditions={"delta": eff_delta})
-        return sol, dt, model
+def modelsolve(delta, s, state: ModelState, f_val, k_val, b_val):
+    dt = 1 / state.stage_amt
+    eff_delta = effective_delta(delta, s)
+    model = pyddm.gddm(
+        drift=drift_rate,
+        noise=0.5,
+        bound=lambda k_val: max(0.5, (1 - k_val) * 5),
+        starting_position=0,
+        T_dur=dt + 1,
+        dx=0.005,
+        dt=0.005,
+        parameters={"f_val": f_val, "k_val": k_val, "b_val": b_val},
+        conditions=["delta", 'timestep'],
+    )
+    sol = model.solve(conditions={"delta": eff_delta, 'timestep': state.t})
+    return sol, dt, model
 
-    def sample_pandas(self, state):
-        df = pd.DataFrame(state.first_passage)
-        df["Disengagment"] = df["Disengagment"].astype(int)
-        return pyddm.Sample.from_pandas_dataframe(df, rt_column_name="Engaged T", choice_column_name="Disengagment")
-        
 
-    def fit(self, state: ModelState):
-        model_to_fit = pyddm.gddm(
-            drift=drift_rate,
-            noise=0.5,
-            bound=lambda b_val: (1 - b_val) * 5,
-            starting_position=lambda k_val: k_val * config.stage_amt / 10,
-            T_dur=(1.0 / config.stage_amt) + 1.0,
-            parameters={"f_val": (0, 1), "k_val": (0, 1), "b_val": (0, 1)},
-            conditions=["delta"],
-        )
-        sample = self.sample_pandas(state)
-        model_to_fit.fit(sample, verbose=False)
-        return model_to_fit
+def sample_pandas(state):
+    df = pd.DataFrame(state.first_passage)
+    df["Disengagment"] = df["Disengagment"].astype(int)
+    return pyddm.Sample.from_pandas_dataframe(df, rt_column_name="Engaged T", choice_column_name="Disengagment")
 
-    def loglikelihood(self, state):
-        model = self.fit(state)
-        sample = self.sample_pandas(state)
-        lossfunc = pyddm.get_model_loss(model, sample)
-        return lossfunc, model.parameters()
+
+def fit(state: ModelState):
+    model_to_fit = pyddm.gddm(
+        drift=drift_rate,
+        noise=0.5,
+        bound=lambda k_val: max(0.5, (1 - k_val) * 5),
+        starting_position=0,
+        T_dur=(1.0 / state.stage_amt) + 1.0,
+        dt=0.005,
+        dx=0.005,
+        parameters={"f_val": (0, 1), "k_val": (0, 1), "b_val": (0, 1)},
+        conditions=["delta", 'timestep'],
+    )
+    sample = sample_pandas(state)
+    model_to_fit.fit(sample, verbose=False)
+    return model_to_fit
+
+
+def loglikelihood(state):
+    model = fit(state)
+    sample = sample_pandas(state)
+    lossfunc = pyddm.get_model_loss(model, sample)
+    return lossfunc, model.parameters()

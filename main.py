@@ -7,11 +7,86 @@
 # Parallelism: --workers N controls how many processes the parameter sweep uses
 #   (defaults to os.cpu_count()). Use --workers 1 to run the sweep serially.
 import os
-import pyddm
-import numpy as np
-import matplotlib.pyplot as plt
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from temporal_difference_model import test_train
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pyddm
+
+from config import UserParams, V
+from ddm import loglikelihood
+from temporal_difference_model import Simulation
+
+FIT_PARAMS = True
+
+def run_learner(sim: Simulation):
+    state = sim.state
+    low_rpe_streak = 0
+    disengaged = False
+    while not disengaged:
+        disengaged = sim.simulate()
+
+        max_rpe = max(abs(x) for x in state.rpe.values())
+
+        if max_rpe < 0.05:
+            low_rpe_streak += 1
+        else:
+            low_rpe_streak = 0
+
+        average_v = sum(V(state, s) for s in range(state.stage_amt)) / state.stage_amt
+
+        state.t += 1
+
+        if (low_rpe_streak >= state.stage_amt and average_v > 0.1) or state.t >= 2000:
+            return
+
+
+def fit_params(state):
+    _, fitted = loglikelihood(state)
+    return {
+        "f": float(fitted["drift"]["f_val"]),
+        "k": float(fitted["bound"]["k_val"]),
+        "b": float(fitted["drift"]["b_val"]),
+    }
+
+
+def run_experiment(params: UserParams, debug=False, extra=0, repeat=1, FIT_PARAMS = True):
+
+    sim = Simulation(params)
+    state = sim.state
+
+    repeats = {}
+    est = None
+    for i in range(repeat):
+        run_learner(sim)
+        if FIT_PARAMS:
+            print('fitting...')
+            est = fit_params(state)
+            repeats[i] = {**est, "t": state.t}
+
+    if debug:
+        print(f"stopped after {state.t} trials")
+        print("V:", [round(V(state, s), 3) for s in range(state.stage_amt)])
+        print("RPE:", [round(state.rpe[s], 3) for s in range(state.stage_amt)])
+        if est is not None:
+            print("Estimated params:", est)
+        print("True params:", sim.params)
+
+    if not extra:
+        result = {
+            "true_f": params.f,
+            "true_k": params.k,
+            "true_b": params.b,
+            "trials": state.t,
+        }
+        if est is not None:
+            result["est_f"] = est["f"]
+            result["est_k"] = est["k"]
+            result["est_b"] = est["b"]
+        return result
+    elif extra == 2:
+        return repeats
 
 
 def _init_worker():
@@ -21,15 +96,19 @@ def _init_worker():
 def _single_run(job):
     param, val, fixed = job
     if param == "f":
-        res = test_train(val, fixed, fixed)
+        res = run_experiment(val, fixed, fixed)
     elif param == "k":
-        res = test_train(fixed, val, fixed)
+        res = run_experiment(fixed, val, fixed)
     else:
-        res = test_train(fixed, fixed, val)
+        res = run_experiment(fixed, fixed, val)
     return param, val, res
 
 
 def collect_results(n=60, repeats=1, workers=None):
+    if not FIT_PARAMS:
+        raise RuntimeError(
+            "Parameter recovery sweep requires fitting; set FIT_PARAMS = True."
+        )
     sweep = np.linspace(0.05, 0.95, n)
     fixed = 0.5
 
@@ -121,8 +200,8 @@ def plot_results(results):
     plt.show()
 
 
-def particlesovertime(f, k, b):
-    data = test_train(f, k, b, False, 2, 5)
+def particlesovertime(params):
+    data = run_experiment(params, False, 2, 5)
     colors = {"f": "#FF0000", "k": "#2200FF", "b": "#00FF4C"}
     x = sorted(data.keys())
 
@@ -138,21 +217,21 @@ def particlesovertime(f, k, b):
 
 
 def run(args):
-    f = k = b = None
+    up = UserParams()
     if args.function == "3":
         workers = args.workers if args.workers else None
         plot_results(collect_results(10, 1, workers=workers))
-        quit()
+        sys.exit()
     if args.function in ('1', '2'):
         params = args.values if args.values else ""
         if params != "":
-            f, k, b = map(float, params.split(","))
+            up.f, up.k, up.b = map(float, params.split(","))
         if args.function == "1":
-            test_train(f, k, b, debug=True)
+            run_experiment(up, debug=True)
         if args.function == "2":
-            particlesovertime(f, k, b)
+            particlesovertime(up)
     else:
-        test_train(f, k, b, debug=True)
+        run_experiment(up, debug=True)
 
 
 if __name__ == "__main__":
