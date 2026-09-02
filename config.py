@@ -1,8 +1,17 @@
-import math
 import random
 from dataclasses import dataclass, field
 
 import numpy as np
+
+REENTRY_COST_LOW = 0.3
+REENTRY_COST_HIGH = 1.0
+
+COST_PROFILES = {"low": REENTRY_COST_LOW, "high": REENTRY_COST_HIGH}
+
+DIFFICULTY_SCALE = 5.0
+GAMMA_SUCCESS = 0.04
+RHO_FAILURE = 0.12
+ABILITY_START = 0.5 # = DIFFICULTY_SCALE * default diff, so P(success) starts at 0.5
 
 
 @dataclass
@@ -17,11 +26,17 @@ class UserParams:
 @dataclass
 class ModelState:
     t: int
-    skill: float # initial preformance that will scale
+    ability: float = ABILITY_START # competence, on the logit scale
     stage_amt: int = 4 # How many stages there are until reward
     diff: float = 0.1 # The difficulty of each stage
+    reentry_cost: float = REENTRY_COST_LOW # structural cost of resuming
     theta: np.ndarray = None
+    # Reserved for the within episode continue/leave node
     first_passage: list = field(default_factory=list)
+    # Between-episode re-entry decisions: one (GO, RT) draw per completed episode.
+    initiation_passages: list = field(default_factory=list)
+    episodes: int = 0 # completed episodes (reward delivered)
+    stuck: int = 0 # initiation draws that came back STAY or timed out
     rpe: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -29,12 +44,18 @@ class ModelState:
             self.theta = np.zeros(len(phi(0, self)))
         if not self.rpe:
             self.rpe = {r: 0 for r in range(self.stage_amt)}
-    
 
-def get_sigma(state: ModelState, base_sigma=0.02, scaling_factor=0.3):
-    raw_sigma = base_sigma + state.diff * scaling_factor + 0.1
-    sigma = raw_sigma / math.sqrt(state.skill) if state.skill != 0 else raw_sigma
-    return sigma
+
+def success_prob(state: ModelState) -> float:
+    return float(sigmoid(state.ability - DIFFICULTY_SCALE * state.diff))
+
+
+def draw_outcome(state: ModelState) -> int:
+    return 1 if random.random() < success_prob(state) else 0
+
+
+def update_ability(state: ModelState, success: int) -> None:
+    state.ability += GAMMA_SUCCESS if success else RHO_FAILURE
 
 
 def sigmoid(z):
@@ -54,35 +75,14 @@ def V(state: ModelState, s):
     return v
 
 
+def value_at_choice_point(state: ModelState) -> float:
+    return V(state, 0)
 
-def drift_rate(delta, f_val, b_val, timestep):
-    reward_signal = np.log1p(np.maximum(10 * (f_val * delta), -1 + 1e-9))
-    boredom = np.log1p(b_val * timestep) 
-    # boredom pushes toward disengagement; learning progress (reward) pushes back
-    return  boredom - reward_signal
 
-def value_of_stage(state: ModelState, p: UserParams, s = None):
-    s = state.stage_amt - 1 if None else s
+def value_of_stage(state: ModelState, p: UserParams, s, reward=0.0):
     V_s = V(state, s)
-    if s == state.stage_amt - 1:
-        sigma = get_sigma(state)
-        r = sigmoid(5 * (state.skill - state.diff)) + random.gauss(0, sigma)
-        r = max(0, min(1, r))
-        V_next = 0.0
-    else:
-        r, V_next = 0.0, V(state, s + 1)
+    V_next = 0.0 if s == state.stage_amt - 1 else V(state, s + 1)
 
-    delta = r + p.g * V_next - V_s
+    delta = reward + p.g * V_next - V_s
     state.theta = state.theta + p.a * delta * phi(s, state)
     return delta
-
-def choose_difficulty(sim, max_disengage_prob=0.3):
-    grid=np.linspace(0.05, 0.5, 20)
-    state = sim.state
-    best = grid[0]
-    for diff in grid:
-        state.difficulty = diff
-        _delta, _, _, sol = sim.useddm(state.stage_amt - 1)
-        if sol.prob('correct') <= max_disengage_prob:
-            best = diff
-    return best

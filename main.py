@@ -1,251 +1,120 @@
-# How to run: run with args --function "1-3" --values f,k,b
-# Values should be between 0 and 1 and seperated by commas: 0.1,0.1,0.1
-# If no value argument they will be random
-# Function 3 and no function arg are the same
-# Functions: 1: Particle Filter(no value arg), 2: Single DDM(Weiner process), 3: terminal stats for one run, 4: Multiple DDMs(no value arg)
-# main.py --function 2 --value 0.1,0.1,0.1
-# Parallelism: --workers N controls how many processes the parameter sweep uses
-#   (defaults to os.cpu_count()). Use --workers 1 to run the sweep serially.
-import os
-import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import argparse
 
-import matplotlib.pyplot as plt
-import numpy as np
-import pyddm
+import pandas as pd
 
-from config import UserParams, V
-from ddm import loglikelihood
+from config import COST_PROFILES, UserParams, value_at_choice_point
+from inference import sanity_check, sanity_check_coupled
+from recovery import (
+    DESIGN,
+    GRID,
+    collect_coupled,
+    recovery,
+    recovery_coupled,
+    simulate_dataset,
+)
 from temporal_difference_model import Simulation
 
-FIT_PARAMS = True
+def run_experiment(params: UserParams, cost=None, max_decisions=200, debug=False):
+    sim = Simulation(params, reentry_cost=cost)
+    state = sim.run(max_decisions=max_decisions)
 
-def run_learner(sim: Simulation):
-    state = sim.state
-    low_rpe_streak = 0
-    disengaged = False
-    while not disengaged:
-        disengaged = sim.simulate()
+    passages = pd.DataFrame(state.initiation_passages)
+    go_rate = (passages["GO"] == 1).mean() if len(passages) else float("nan")
 
-        max_rpe = max(abs(x) for x in state.rpe.values())
+    if debug:
+        print(f"true params: f={params.f:.3f} k={params.k:.3f}")
+        print(f"re-entry cost: {state.reentry_cost}")
+        print(f"ticks={state.t} episodes={state.episodes} stuck={state.stuck}")
+        print(f"initiation decisions={len(passages)} P(GO)={go_rate:.3f}")
+        print(f"V at re-entry: {value_at_choice_point(state):.3f}")
+        print("RPE:", [round(float(state.rpe[s]), 3) for s in range(state.stage_amt)])
+        if len(passages):
+            print("\nlast 10 re-entry decisions:")
+            print(passages.tail(10).to_string(index=False))
 
-        if max_rpe < 0.05:
-            low_rpe_streak += 1
-        else:
-            low_rpe_streak = 0
-
-        average_v = sum(V(state, s) for s in range(state.stage_amt)) / state.stage_amt
-
-        state.t += 1
-
-        if (low_rpe_streak >= state.stage_amt and average_v > 0.1) or state.t >= 2000:
-            return
-
-
-def fit_params(state):
-    _, fitted = loglikelihood(state)
     return {
-        "f": float(fitted["drift"]["f_val"]),
-        "k": float(fitted["bound"]["k_val"]),
-        "b": float(fitted["drift"]["b_val"]),
+        "true_f": params.f,
+        "true_k": params.k,
+        "reentry_cost": state.reentry_cost,
+        "ticks": state.t,
+        "episodes": state.episodes,
+        "stuck": state.stuck,
+        "decisions": len(passages),
+        "p_go": go_rate,
     }
 
 
-def run_experiment(params: UserParams, debug=False, extra=0, repeat=1, FIT_PARAMS = True):
+def cmd_run(args):
+    params = UserParams()
+    if args.values:
+        params.f, params.k = map(float, args.values.split(",")[:2])
 
-    sim = Simulation(params)
-    state = sim.state
+    run_experiment(
+        params,
+        cost=COST_PROFILES[args.cost],
+        max_decisions=args.decisions,
+        debug=True,
+    )
 
-    repeats = {}
-    est = None
-    for i in range(repeat):
-        run_learner(sim)
-        if FIT_PARAMS:
-            print('fitting...')
-            est = fit_params(state)
-            repeats[i] = {**est, "t": state.t}
-
-    if debug:
-        print(f"stopped after {state.t} trials")
-        print("V:", [round(V(state, s), 3) for s in range(state.stage_amt)])
-        print("RPE:", [round(state.rpe[s], 3) for s in range(state.stage_amt)])
-        if est is not None:
-            print("Estimated params:", est)
-        print("True params:", sim.params)
-
-    if not extra:
-        result = {
-            "true_f": params.f,
-            "true_k": params.k,
-            "true_b": params.b,
-            "trials": state.t,
-        }
-        if est is not None:
-            result["est_f"] = est["f"]
-            result["est_k"] = est["k"]
-            result["est_b"] = est["b"]
-        return result
-    elif extra == 2:
-        return repeats
+def _report(stats, label):
+    print(f"\n{label}: " + "  ".join(
+        f"{name}: r = {s['r']:.3f}, RMSE = {s['rmse']:.3f}"
+        for name, s in stats.items()
+    ))
 
 
-def _init_worker():
-    pyddm.set_N_cpus(1)
+def cmd_recovery(args):
+    if args.mode in ("uncoupled", "both"):
+        print("=== uncoupled sanity check (f = 0.8, k = 0.8) ===")
+        demo = simulate_dataset(0.8, 0.8, DESIGN, n_per_cell=200)
+        print(f"{len(demo)} rows")
+        sanity_check(demo)
 
+        print(f"\n=== uncoupled recovery ({len(GRID)} points x {args.reps} reps) ===")
+        res = recovery(GRID, reps=args.reps)
+        _report(res.attrs["stats"], "uncoupled")
 
-def _single_run(job):
-    param, val, fixed = job
-    if param == "f":
-        res = run_experiment(val, fixed, fixed)
-    elif param == "k":
-        res = run_experiment(fixed, val, fixed)
-    else:
-        res = run_experiment(fixed, fixed, val)
-    return param, val, res
+    if args.mode in ("coupled", "both"):
+        print("\n=== coupled sanity check (f = 0.8, k = 0.8) ===")
+        demo = collect_coupled(0.8, 0.8)
+        print(f"{len(demo)} rows")
+        sanity_check_coupled(demo)
 
+        print(f"\n=== coupled recovery ({len(GRID)} points x {args.reps} reps) ===")
+        res = recovery_coupled(GRID, reps=args.reps)
+        _report(res.attrs["stats"], "coupled")
 
-def collect_results(n=60, repeats=1, workers=None):
-    if not FIT_PARAMS:
-        raise RuntimeError(
-            "Parameter recovery sweep requires fitting; set FIT_PARAMS = True."
-        )
-    sweep = np.linspace(0.05, 0.95, n)
-    fixed = 0.5
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command")
 
-    jobs = []
-    for val in sweep:
-        for param in ("f", "k", "b"):
-            for _ in range(repeats):
-                jobs.append((param, float(val), fixed))
+    p_run = sub.add_parser("run", help="simulate one learner (default)")
+    p_run.add_argument("--values", help="f,k as comma separated floats; random if omitted")
+    p_run.add_argument("--cost", choices=tuple(COST_PROFILES), default="low")
+    p_run.add_argument("--decisions", type=int, default=200,
+                       help="how many initiation decisions to collect")
+    p_run.set_defaults(func=cmd_run)
 
-    runs = {}
-    total = len(jobs)
+    p_rec = sub.add_parser("recovery", help="parameter recovery sweep and plot")
+    p_rec.add_argument("--mode", choices=("coupled", "uncoupled", "both"),
+                       default="coupled",
+                       help="coupled: value from the TD learner (default). "
+                            "uncoupled: value as a fixed design constant.")
+    p_rec.add_argument("--reps", type=int, default=5,
+                       help="repetitions per grid point")
+    p_rec.set_defaults(func=cmd_recovery)
 
-    print(f"Starting sweep: {total} runs over {n} values "
-          f"({'serial' if workers == 1 else f'{workers or os.cpu_count()} workers'})",
-          flush=True)
-
-    def _record(i, param, val, res):
-        runs.setdefault((param, round(val, 6)), []).append(res)
-        print(f"[{i}/{total}] {param}={val:.3f} -> "
-              f"trials={res['trials']}, est_{param}={res[f'est_{param}']:.3f}",
-              flush=True)
-
-    if workers == 1:
-        for i, job in enumerate(jobs, start=1):
-            _record(i, *_single_run(job))
-    else:
-        with ProcessPoolExecutor(max_workers=workers, initializer=_init_worker) as ex:
-            futures = [ex.submit(_single_run, job) for job in jobs]
-            for i, fut in enumerate(as_completed(futures), start=1):
-                _record(i, *fut.result())
-
-    print(f"Sweep complete ({total} runs). Aggregating and plotting...", flush=True)
-
-    results = []
-    for val in sweep:
-        for param in ("f", "k", "b"):
-            rs = runs[(param, round(float(val), 6))]
-            results.append(
-                {
-                    "param": param,
-                    "true_f": val if param == "f" else fixed,
-                    "true_k": val if param == "k" else fixed,
-                    "true_b": val if param == "b" else fixed,
-                    "avg_trials": np.mean([r["trials"] for r in rs]),
-                    "est_f": np.mean([r["est_f"] for r in rs]),
-                    "est_k": np.mean([r["est_k"] for r in rs]),
-                    "est_b": np.mean([r["est_b"] for r in rs]),
-                }
-            )
-
-    return results
-
-
-def plot_results(results):
-
-    f_est = [(r["true_f"], r["est_f"]) for r in results if r["param"] == "f"]
-    k_est = [(r["true_k"], r["est_k"]) for r in results if r["param"] == "k"]
-    b_est = [(r["true_b"], r["est_b"]) for r in results if r["param"] == "b"]
-
-    f_sweept = [(r["true_f"], r["avg_trials"]) for r in results if r["param"] == "f"]
-    k_sweept = [(r["true_k"], r["avg_trials"]) for r in results if r["param"] == "k"]
-    b_sweept = [(r["true_b"], r["avg_trials"]) for r in results if r["param"] == "b"]
-
-    _, (ax2, ax3) = plt.subplots(1, 2, figsize=(12, 6))
-
-    lims = [0.05, 0.95]
-    ax2.plot(lims, lims, "k--", alpha=0.4, label="ideal recovery")
-    ax2.scatter(*zip(*sorted(f_est)), color="#2196F3", s=15, alpha=0.7, label="est f")
-    ax2.scatter(*zip(*sorted(k_est)), color="#FF5722", s=15, alpha=0.7, label="est k")
-    ax2.scatter(*zip(*sorted(b_est)), color="#4CAF50", s=15, alpha=0.7, label="est b")
-    ax2.set_xlabel("True parameter value")
-    ax2.set_ylabel("Estimated parameter value")
-    ax2.set_title("Parameter Recovery")
-    ax2.set_xlim(lims)
-    ax2.set_ylim(lims)
-    ax2.legend()
-
-    ax3.plot(*zip(*sorted(k_sweept)), color="#FF5722", label="k (effort aversion)")
-    ax3.plot(*zip(*sorted(f_sweept)), color="#2196F3", label="f (progress sensitivity)")
-    ax3.plot(*zip(*sorted(b_sweept)), color="#4CAF50", label="b (boredom rate)")
-    ax3.set_xlabel("Parameter value")
-    ax3.set_ylabel("Average Trials completed")
-    ax3.set_title("Parameter vs Engagement")
-    ax3.legend()
-
-    plt.tight_layout()
-
-    plt.savefig("assets/engagement_by_params.png", dpi=150, bbox_inches="tight")
-    plt.show()
-
-
-def particlesovertime(params):
-    data = run_experiment(params, False, 2, 5)
-    colors = {"f": "#FF0000", "k": "#2200FF", "b": "#00FF4C"}
-    x = sorted(data.keys())
-
-    for key, color in colors.items():
-        y = [data[xi][key] for xi in x]
-        plt.plot(x, y, marker="o", label=key, color=color)
-
-    plt.xlabel("Trial Num")
-    plt.ylabel("Value")
-    plt.legend()
-    plt.title("")
-    plt.show()
-
-
-def run(args):
-    up = UserParams()
-    if args.function == "3":
-        workers = args.workers if args.workers else None
-        plot_results(collect_results(10, 1, workers=workers))
-        sys.exit()
-    if args.function in ('1', '2'):
-        params = args.values if args.values else ""
-        if params != "":
-            up.f, up.k, up.b = map(float, params.split(","))
-        if args.function == "1":
-            run_experiment(up, debug=True)
-        if args.function == "2":
-            particlesovertime(up)
-    else:
-        run_experiment(up, debug=True)
+    return parser
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--function", default="1")
-    parser.add_argument("--values")
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=None,
-        help="processes for the parameter sweep (default: all cores, 1 = serial)",
-    )
+    parser = build_parser()
     args = parser.parse_args()
 
-    run(args)
+    if args.command is None:
+        args = parser.parse_args(["run"])
+
+    args.func(args)
