@@ -1,0 +1,6 @@
+.venv
+data
+assets
+__pycache__
+*.csv
+.git

@@ -1,0 +1,28 @@
+# Fly.io deployment of web.py. First time: fly launch --copy-config --no-deploy, then
+# fly volumes create temporal_data --size 1, fly secrets set TEMPORAL_RESEARCHERS=you@x.com,
+# fly deploy, fly scale count 1. See "On a website" in README.md.
+app = "temporal-task"
+primary_region = "iad"
+
+[env]
+  PORT = "8000"
+  TEMPORAL_DATA = "/data"
+  # Keep "0" until research with other people is approved. Researchers (a secret, so
+  # their emails stay out of the repo) are saved and see dev stuff either way.
+  TEMPORAL_COLLECT = "0"
+  TEMPORAL_PANEL = "0"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"  # stopping would end every live session
+  auto_start_machines = true
+  min_machines_running = 1
+
+[mounts]
+  source = "temporal_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "1gb"  # fits and controller plans run in worker processes
+  cpus = 1

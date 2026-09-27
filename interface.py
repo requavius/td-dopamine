@@ -11,10 +11,14 @@ import random
 import signal
 import threading
 import time
-import tkinter as tk
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from tkinter import ttk
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError:  # a server without Tk (web.py) uses only the logic
+    tk = ttk = None
 
 import numpy as np
 import pandas as pd
@@ -50,8 +54,21 @@ MONO = ("Menlo", 11)
 
 # Decision logs live in decisions.jsonl; state.json holds everything else.
 LOGS = ("initiation_passages", "first_passage", "persistence")
-SETTINGS = ("target", "stages", "cold", "review", "return_skipped", "controller",
-            "show_count", "show_score", "feedback", "show_choice", "forced")
+# Settings and their defaults; the kind of variable follows the type of the default.
+DEFAULTS = {
+    "target": 0.75,         # chance of getting a question right
+    "stages": 4,
+    "cold": 0.6,            # cold-start cost profile
+    "review": 0.25,         # chance a slot brings back an owed question
+    "return_skipped": False, # skipped questions join what review brings back
+    "controller": False,
+    "show_count": True,
+    "show_score": True,
+    "feedback": True,
+    "show_choice": True,
+    "forced": "continue",
+}
+SETTINGS = tuple(DEFAULTS)
 
 
 # ---------------------------------------------------------------- persistence
@@ -206,6 +223,21 @@ class Store:
         except Exception:
             return None, True
 
+# f and k from decisions, patience from answer and skip times, as text.
+def fit_summary(df, attempts):
+    f_hat, k_hat, t0_hat = fit(df, t0=True)
+    gave_up = int(attempts["skipped"].sum()) if len(attempts) else 0
+    patience = f"{fit_patience(f_hat, k_hat, attempts):5.1f}s" if gave_up else "  n/a"
+    return "\n".join([
+        f"f (reward pull)  {f_hat:5.2f}",
+        f"k (effort push)  {k_hat:5.2f}",
+        f"patience         {patience}",
+        f"non-decision     {t0_hat:5.2f}s",
+        f"f, k: {len(df)} decisions",
+        f"patience: {len(attempts)} questions, {gave_up} given up",
+        "rough under ~700 decisions",
+    ])
+
 # ---------------------------------------------------------------- the app
 
 class App:
@@ -219,17 +251,8 @@ class App:
         self.params = UserParams(f=0.0, k=0.0)
         self.store = Store(data_dir)
 
-        self.v_target = tk.DoubleVar(value=0.75) # chance of getting a question right
-        self.v_stages = tk.IntVar(value=4)
-        self.v_cold = tk.DoubleVar(value=0.6) # cold-start cost profile
-        self.v_review = tk.DoubleVar(value=0.25) # chance a slot brings back an owed question
-        self.v_return_skipped = tk.BooleanVar(value=False)  # skipped questions join what review brings back
-        self.v_controller = tk.BooleanVar(value=False)
-        self.v_show_count = tk.BooleanVar(value=True)
-        self.v_show_score = tk.BooleanVar(value=True)
-        self.v_feedback = tk.BooleanVar(value=True)
-        self.v_show_choice = tk.BooleanVar(value=True)
-        self.v_forced = tk.StringVar(value="continue")
+        for name, value in DEFAULTS.items():
+            setattr(self, "v_" + name, self.make_var(value))
 
         self._timer = None
         self.problem = None # the question on screen: (text, answer)
@@ -262,6 +285,11 @@ class App:
         atexit.register(self._record_unclean_exit)
 
     # ------------------------------------------------------------ load / save
+
+    @staticmethod
+    def make_var(value):
+        kind = {bool: tk.BooleanVar, int: tk.IntVar, float: tk.DoubleVar, str: tk.StringVar}
+        return kind[type(value)](value=value)
 
     def settings(self):
         return {name: getattr(self, "v_" + name).get() for name in SETTINGS}
@@ -422,13 +450,13 @@ class App:
         for w in self.left.winfo_children():
             w.destroy()
 
-    def refresh_stats(self):
+    def stats_text(self):
         s = self.state
         starts = s.initiation_passages
         yes = sum(p["GO"] == 1 for p in starts)
         no = sum(p["GO"] == 0 for p in starts)
         base, effort = cost_components(s)
-        self.stats.config(text="\n".join([
+        return "\n".join([
             f"measured ability {self.ratings.ability:6.2f}",
             f"V(next set)      {value_at_choice_point(s):6.3f}",
             f"cost now         {base + effort:6.3f}",
@@ -441,9 +469,14 @@ class App:
             f"sets done        {s.episodes:6d}",
             f"start: yes / no  {yes:3d} / {no}",
             f"redo decisions   {len(s.first_passage):6d}",
-        ]))
-        self.now_label.config(
-            text=f"now: {TYPES[self.item].name}, your chance {self.p_now:.0%}")
+        ])
+
+    def now_text(self):
+        return f"now: {TYPES[self.item].name}, your chance {self.p_now:.0%}"
+
+    def refresh_stats(self):
+        self.stats.config(text=self.stats_text())
+        self.now_label.config(text=self.now_text())
         self.ctrl_label.config(text=f"controller: {self.controller_status}")
 
     # ------------------------------------------------------------ screens
@@ -504,6 +537,12 @@ class App:
             header.append(f"{self.passed} right")
         if self.reviewing and self.feedback_this_set:
             header.append("review") # flagged only with feedback on; it gives away a past miss
+        self.render_problem(text, header)
+        self.screen = "question"
+        self.persist()  # so an exit nothing sees still leaves a record of what was on screen
+        self.shown_at = time.perf_counter()
+
+    def render_problem(self, text, header):
         ttk.Label(self.left, text="   ".join(header), font=SMALL).grid(row=0, column=0, pady=(20, 0))
 
         ttk.Label(self.left, text=f"{text} = ?", font=BIG).grid(row=1, column=0, pady=30)
@@ -516,9 +555,6 @@ class App:
                   font=SMALL).grid(row=3, column=0, pady=12)
         ttk.Button(self.left, text="skip  (esc)", command=self.on_skip).grid(row=4, column=0)
         self.refresh_stats()
-        self.screen = "question"
-        self.persist()  # so an exit nothing sees still leaves a record of what was on screen
-        self.shown_at = time.perf_counter()
 
     def flash(self, text, then):
         self.clear()
@@ -559,8 +595,10 @@ class App:
         else:
             self.show_problem()
 
-    def on_answer(self, raw):
-        rt = time.perf_counter() - self.shown_at
+    # `rt` is measured here unless the front end timed it (web.py times it in the browser).
+    def on_answer(self, raw, rt=None):
+        if rt is None:
+            rt = time.perf_counter() - self.shown_at
         raw = raw.strip()
         try:
             correct = int(raw) == self.answer
@@ -663,10 +701,11 @@ class App:
 
     # They gave up on the question on screen. How long they worked on it first is the
     # measurement; a skip is neither right nor wrong, so the ratings do not move.
-    def on_skip(self):
+    def on_skip(self, rt=None):
         if self.closed or self.screen != "question":
             return
-        rt = time.perf_counter() - self.shown_at
+        if rt is None:
+            rt = time.perf_counter() - self.shown_at
         self.screen = None
         self.steps += 1
         self.skips += 1
@@ -899,11 +938,9 @@ class App:
             return
         # The settings may have been moved by hand since the last plan.
         self.controller.env = self.current_environment()
-        if self._pool is None:
-            self._pool = ProcessPoolExecutor(max_workers=1)
         self.controller_status = "planning..."
         # Copy now: the worker pickles later, while this thread keeps logging.
-        self._plan_future = self._pool.submit(
+        self._plan_future = self.executor().submit(
             plan_in_worker, self.controller, copy.deepcopy(self.state), self.params)
         self.root.after(200, self.check_plan)
 
@@ -944,6 +981,11 @@ class App:
                            "reason": update.reason})
         self.refresh_stats()
 
+    def executor(self):
+        if self._pool is None:
+            self._pool = ProcessPoolExecutor(max_workers=1)
+        return self._pool
+
     def shutdown(self):
         if self._pool is not None:
             self._pool.shutdown(wait=False, cancel_futures=True)
@@ -964,18 +1006,7 @@ class App:
 
         def work():
             try:
-                f_hat, k_hat, t0_hat = fit(df, t0=True)
-                gave_up = int(attempts["skipped"].sum()) if len(attempts) else 0
-                patience = f"{fit_patience(f_hat, k_hat, attempts):5.1f}s" if gave_up else "  n/a"
-                text = "\n".join([
-                    f"f (reward pull)  {f_hat:5.2f}",
-                    f"k (effort push)  {k_hat:5.2f}",
-                    f"patience         {patience}",
-                    f"non-decision     {t0_hat:5.2f}s",
-                    f"f, k: {len(df)} decisions",
-                    f"patience: {len(attempts)} questions, {gave_up} given up",
-                    "rough under ~700 decisions",
-                ])
+                text = fit_summary(df, attempts)
             except Exception as exc:
                 text = f"fit failed: {exc}"
 

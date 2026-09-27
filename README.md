@@ -16,7 +16,7 @@ from a real person has been validated yet.
 
 ---
 
-## Main Equation
+## Main equation
 
 Every time a person finishes a set, they face a small decision: start the next
 one, or stop. The model formalizes that decision as
@@ -65,14 +65,14 @@ on that question.
 
 - **Patience is per person.** Model time becomes seconds through `patience`, the
   seconds per unit of model time; someone who skips at a glance has a small one. It
-  was a fixed 10 s at first. The first real player's skips took 1.5–4.2 s, which at
+  was a fixed 10 s at first. The first real player's skips took 1.5 to 4.2 s, which at
   10 s are 1-in-10,000 to 1-in-10,000,000 events. Their fitted patience is 2.8 s
   (−log L 38, against 55 at 10 s).
 - **Answered questions count too.** An answer after 25 s says "kept going at least
   25 s", so it enters the likelihood through the survival function, as a right-censored
   time to give up. Every question is an observation, skipped or not.
-- **Lapses.** 2% of questions are treated as given up on, or kept at, for reasons the
-  model does not describe, at a uniform time within 60 s. One odd skip (79 + 85, an
+- **2% of questions are lapses**: given up on, or kept at, for reasons the model does
+  not describe, at a uniform time within 60 s. One odd skip (79 + 85, an
   83% chance for that player, dropped after 2.2 s) then cannot decide the estimate
   on its own.
 - **Leaving from the first question after coming back** is giving up on it too. In
@@ -95,7 +95,7 @@ From behavior alone, recover `f` and `k` for a specific person (`inference.fit`)
 
 ## 2. Control (`controller.py`)
 
-This is the objective of the project: use the recovered parameters to adjust the
+This is what the project is for: using the recovered parameters to adjust the
 environment so the person keeps engaging and keeps being challenged.
 
 Every few sets the controller re-fits the person's `f` and `k` (shrunk toward a prior
@@ -125,14 +125,14 @@ one run at 52 reward, against 210 for the best fixed setting. With the re-test i
 feedback from its first plan: 89 reward over 200 decisions, against 2.6 at the default.
 
 Over 84 settings, on an idle machine at `T_DUR = 7.0` with about 150 decisions of
-history, a plan takes 21–27 s when the parameters are known and 60–250 s when it re-fits:
+history, a plan takes 21 to 27 s when the parameters are known and 60 to 250 s when it re-fits:
 the fit dominates and grows with data. The interface runs it in a separate process, so
 play continues meanwhile.
 
 About 15% of updates pick a setting at random instead. Those probes are independent of
 the person, and when the best setting keeps feedback on they are the only source of
-sets with it hidden. Those sets are now what put both ways of timing a set's reward
-into the same record.
+sets with it hidden, so they are what gets both ways of timing a set's reward into
+the same record.
 
 Total reward is right answers weighted by how hard each was
 for the person, `1 − p`, summed over the sets they go on to play. Three other
@@ -223,8 +223,8 @@ Verdicts under the rule (paired difference over the 8 seeds; a win or loss only 
   14% ± 6% of decisions; given true parameters, 76% ± 7%.
 - **Given true parameters it does not reach the best fixed setting for two people**:
   −40.3 ± 17.9 for f 0.8, k 0.8 and −57.1 ± 27.0 for f 1.2, k 0.4, about 77% of the best.
-  The other three are undetermined, with ratios of 72–103% and wide intervals. The
-  earlier "84–99% of the best fixed setting" is withdrawn; it came from 2 seeds, scored
+  The other three are undetermined, with ratios of 72 to 103% and wide intervals. The
+  earlier "84 to 99% of the best fixed setting" is withdrawn; it came from 2 seeds, scored
   where the best setting was picked.
 - **Skipping was described, not tested.** People skipped 1.3% ± 0.1% of questions
   (f 1.2, k 0.4) to 14.0% ± 4.3% (f 0.6, k 1.2) under the fitted controller,
@@ -322,18 +322,18 @@ below cost and every simulated person gave up whatever the difficulty. Since dri
 is `f · Value`, the scale and `f` are interchangeable: changing one is equivalent to
 rescaling the other.
 
-**Effort.** The effort a set costs is its review load (the share of slots spent
+The effort a set costs is its review load (the share of slots spent
 going back over mistakes), and it raises the cost of the next start decision.
 
-**Review.** A slot normally holds a new question. It can instead revisit one missed
+A slot normally holds a new question. It can instead revisit one missed
 earlier, displacing the new question: sets never get longer, so review trades
 against coverage. Who decides that is `review_mode`, described under the learner.
 
-**Feedback.** When right/wrong is hidden for a set, there is also no redo prompt: it
+When right/wrong is hidden for a set, there is also no redo prompt: it
 would only ever appear after a miss, so offering it would reveal the miss. Owed
 questions still come back through review.
 
-**Skips.** A skipped question spends its slot and earns nothing. It is held apart
+A skipped question spends its slot and earns nothing. It is held apart
 from the questions missed: whether skipped questions join what review brings back is
 a setting (`return_skipped`, a controller lever). One that comes back and is answered
 right counts as a correction; answered wrong, it is owed like any miss; skipped
@@ -424,7 +424,7 @@ skill can no longer be manipulated separately. Measured at `f = 0.8`, 800 decisi
 
 Competence is kept off `δ` because these are different learning systems. Prediction
 error is the teaching signal for value; competence comes from repetition and error
-correction, on a substantially separable substrate. Driving skill from `max(0, δ)`
+correction, a largely separate learning system. Driving skill from `max(0, δ)`
 would halt competence growth as soon as predictions become accurate, which is the
 wrong direction: expertise continues to refine long after outcomes become
 predictable.
@@ -462,7 +462,7 @@ so what it carries is `k`.
 one-boundary process with no deadline. Seconds become model time through the person's
 `patience` (default 10 s), estimated per person. Simulated people also need a time
 to solve each question; it is lognormal with a median of `4 s / p^0.7`: about 4 s for
-a sure thing and 20 s at a 10% chance, close to the 1–30 s one human took in
+a sure thing and 20 s at a 10% chance, close to the 1 to 30 s one human took in
 `data/`. Real people simply take the time they take.
 
 ### 4. Inference
@@ -521,7 +521,7 @@ Replaying a record written under the current rules reproduces the ratings kept l
 exactly, so the rebuild is the same rule applied after the fact, not an approximation.
 
 `RULES` went to 3 on 2026-09-21, when the reaction terms were removed. That one is not
-replayable: a start decision logged under rules 1–2 holds a `value` that predates the
+replayable: a start decision logged under rules 1 and 2 holds a `value` that predates the
 prediction-error carry, so its `value` is right for the drift it was drawn under and
 not comparable with a later row. The rows are kept and still fit, since the drift form
 `f · value − k · cost` is unchanged, but they under-represent how much value varies.
@@ -546,7 +546,7 @@ process every 5 sets and moves the settings panel itself, with a line saying why
 it off, the target chance, review rate and the feedback and skipped checkboxes are
 yours. Feedback changes apply from the next set.
 
-Three properties of human data follow from this flow, and both matter for inference:
+Three properties of human data follow from this flow, and all three matter for inference:
 
 - **Every stop is a session end.** Each session contributes at most one "no" at the
   start prompt, and those are what identify `k` there. Many sessions are needed. In
@@ -567,6 +567,65 @@ A redo in the interface is an extra question rather than the next slot, so a hum
 set can run past `stage_amt` questions and its review load can exceed 1; in the
 simulator's `choice` mode a redo takes the next slot.
 
+### On a website (`web.py`)
+
+`python web.py` serves the same task in a browser at `http://127.0.0.1:8000`. The
+browser only draws screens and times them; every rule is `interface.App`'s, run on the
+server by a subclass that sends its screens to the page instead of Tk. Nothing about
+the task, the record or the inference is re-implemented.
+
+**Data collection is off until it is approved.** Research with other people needs
+approval first, so by default (`TEMPORAL_COLLECT=0`) nobody else's data is kept:
+
+- The start screen shows the consent information
+  (a **draft**, in `web/index.html`, to be replaced with the approved wording), and
+  offers two ways in: **as a guest** or **with an email**.
+- **Guests are never saved.** Their record lives in a temporary folder that is deleted
+  when they leave the page.
+- **Email** is accepted only for the addresses in `TEMPORAL_RESEARCHERS`
+  (comma-separated): the researchers, playing themselves. Their records are kept in
+  `$TEMPORAL_DATA/<email>/` (default `data/web/<email>/`), with the same
+  `decisions.jsonl` / `state.json` / `controller.pkl` as `data/`, and they see
+  "dev stuff".
+- With `TEMPORAL_COLLECT=1` anyone may take part with an email after ticking the
+  consent box. The first event of each session is a `consent` record with the email,
+  whether they agreed, and `CONSENT_VERSION` (in `web.py`; bump it whenever the consent
+  text changes).
+
+The email is not verified: anyone who types an address plays as that person. That
+is enough to keep one person's sessions together, but it is not a login.
+
+- **Reaction times are measured in the browser**, from the moment a screen is painted
+  to the key press or click, so network latency never enters an RT. The 600 ms
+  "correct" / "wrong" flash plays in the browser before the next screen, and its clock
+  starts after the flash.
+- **Starting from the start screen is launching the app**, so each start is a new
+  session. Closing the tab, reloading or navigating away is closing the window: it is
+  logged as an `abandon` with what was on screen and the browser's time on it. Starting
+  again elsewhere (another tab or device, same email) closes the first one the same way.
+  A page left silent for 2 hours is closed as well. A server that dies without closing
+  is caught on the next launch, as `unlogged`, the same as a crash on the desktop.
+- **Plans and fits run in one process pool** shared by all players.
+- **Dev stuff** (settings, behind the scenes, fit, export) is shown to researchers
+  only, or to everyone with `TEMPORAL_PANEL=1`.
+
+Run it as **one worker process**: live sessions are held in memory.
+
+**Hosting on Fly.io** (`fly.toml` is in the repo):
+
+```bash
+brew install flyctl && fly auth login
+fly launch --copy-config --no-deploy        # pick an app name and region
+fly volumes create temporal_data --size 1   # where records live; without it, a redeploy wipes them
+fly secrets set TEMPORAL_RESEARCHERS=you@example.com
+fly deploy
+fly scale count 1                           # exactly one machine: sessions are in memory
+fly ssh sftp get /data -r ./data-from-fly   # download the records
+```
+
+Anywhere else, build the `Dockerfile`, mount a persistent volume at `/data`, and
+set the same environment variables. It listens on `$PORT` (default 8000).
+
 ---
 
 ## Running it
@@ -578,6 +637,10 @@ uv sync
 ```bash
 # Play it yourself. Data is kept in data/ between sessions.
 python interface.py
+
+# The same task in a browser, at http://127.0.0.1:8000. Only researchers' data is kept,
+# in data/web/<email>/, until TEMPORAL_COLLECT=1.
+TEMPORAL_RESEARCHERS=you@example.com python web.py
 
 # One simulated person: a fixed setting vs the controller
 python controller.py --values 0.8,0.8
@@ -625,11 +688,11 @@ pipeline and `--reps` sets repetitions per grid point. For `controller.py`:
 | `recovery.py` | Data generation and recovery pipelines, including persistence and patience. |
 | `controller.py` | Re-fits the person, simulates candidate settings from their current state, switches to the one earning the most reward. |
 | `interface.py` | Human-playable version: no countdown, stop closes the app, persistent record. |
+| `web.py`, `web/index.html` | The same app served to a browser: start screen, consent, guest or email, one record per email. |
+| `Dockerfile`, `fly.toml` | Hosting `web.py`; data in a volume at `/data`. |
 | `plots.py` | Recovery figures. |
 | `data/` | Human session record (created by `interface.py`, gitignored). |
-| `NOTES.md` | Working notebook: intent, findings, open questions. |
 | `assets/` | Generated figures. |
-| `test.py` | Scratch pyddm example, not part of the model. |
 
 ---
 
@@ -639,14 +702,15 @@ All `f, k` recovery runs sweep a 4×4 grid over `f, k ∈ {0.2, 0.6, 1.0, 1.5}`,
 400-row floor, and check that P(GO) rises with value and falls with cost before
 fitting anything.
 
-**Drift.** Every result in this section predates 2026-09-21, when the three reaction
+**Most results here predate the current drift.** Every result in this section predates 2026-09-21, when the three reaction
 terms were removed and what a set does to the next decision became prediction error
 inside `value` (see "Feedback is timing, not reward"). On the single-`diff` task the
 learner saturates, so `δ` is small there and the recovery numbers move little; where
 they have been re-measured the table says so. Anything quoting a `b` term is retired.
 
-**Deadline and bootstrap.** Every result in this section was measured at `T_DUR = 3.0`
-with the terminal value bootstrap unless it says otherwise. The deadline moved to 7.0 s on 2026-09-13 (see "The deadline was discarding
+**Most were also measured at the old deadline and bootstrap.** Every result in this
+section was measured at `T_DUR = 3.0` with the terminal value bootstrap unless it says
+otherwise. The deadline moved to 7.0 s on 2026-09-13 (see "The deadline was discarding
 human choices"). That changes simulated people too: fewer draws time out. Results
 re-measured at 7.0 s say so.
 
@@ -681,7 +745,7 @@ Paired by grid point and rep:
   [0.000, +0.018].
 - **The continuing bootstrap is a real gain.** Against the terminal one, for one learner:
   `f` −0.026 [−0.045, −0.006], because value varies about twice as much.
-- **Errors concentrate at `f = 1.5`.** Per-grid-point `f` RMSE there is 0.03–0.11 even
+- **Errors concentrate at `f = 1.5`.** Per-grid-point `f` RMSE there is 0.03 to 0.11 even
   with reseeding.
 
 **Replacement, fixed before its test reps were run.** The design:
@@ -698,7 +762,7 @@ one step plans like the truth or its neighbour. The `k` bound stops `f` being bo
 with `k`.
 
 **Verdict: the original condition (`f` RMSE near 0.035) is not met and is retired; the
-replacement is met.** On the 48 fresh fits (reps 3–5): **`f` RMSE 0.045 [0.037, 0.053]**
+replacement is met.** On the 48 fresh fits (reps 3 to 5): **`f` RMSE 0.045 [0.037, 0.053]**
 and **`k` RMSE 0.042 [0.030, 0.057]**, both under 0.05.
 - **The margin is thin.** The upper ends of both 95% intervals are above 0.05, so any
   change that could move either by 0.01 should be re-checked against this condition,
@@ -722,7 +786,7 @@ range, and `f` is identified from variation in value. This has not been measured
 
 **The single-run pipeline is the point of the cost restructure.** Before it, a run
 charged one constant cost for every decision, so `k` could not be recovered from one
-participant at all: `k̂` sat at 0.42–0.55 against a truth of 0.80 regardless of how
+participant at all: `k̂` sat at 0.42 to 0.55 against a truth of 0.80 regardless of how
 much data accumulated, and `collect_coupled` had to pool two simulations at different
 costs to manufacture the contrast. Endogenous contrast is still weaker than a designed
 one: use `single` when modelling one real participant, `coupled` when you control the
@@ -742,12 +806,12 @@ question wrong and being shown it moved `δ` by exactly nothing, and feedback ne
 entered the TD system anywhere. The three terms were reading, off to the side, what the
 value system should have been computing.
 
-The replacement is the mechanism itself. A slot's worth lands when the person is shown
-it; with feedback hidden it lands at the end-of-set score instead, and a set totals the
+They are replaced by the mechanism they stood in for. A slot's worth lands when the
+person is shown it; with feedback hidden it lands at the end-of-set score instead, and a set totals the
 same either way. A seen miss is then a slot that paid nothing against a value that
-expected something, which is a negative `δ`, and an unseen miss cannot produce one. That error
-is carried into the next decision through `value`, at full weight, scaled by the same
-`f` as everything else. Three fitted parameters removed, none added.
+expected something, which is a negative `δ`, and an unseen miss cannot produce one. That
+error is carried into the next decision through `value`, at full weight, scaled by the
+same `f` as everything else. That removes three fitted parameters and adds none.
 
 **It improves recovery, because value now varies more.** `f` is identified from
 variation in value, and prediction error is most of that variation. Same pipelines,
@@ -770,7 +834,7 @@ each, four `(f, k)` pairs × 2 seeds, settings switched by random probes:
 |---|---|---|
 | RMSE | 0.049 | 0.027 |
 
-with value sd 0.35–0.41 and `corr(value, cost)` −0.22 to −0.50. The correlation is
+with value sd 0.35 to 0.41 and `corr(value, cost)` −0.22 to −0.50. The correlation is
 higher than before and recovery is better anyway; see "Value and cost must vary
 orthogonally".
 
@@ -796,8 +860,7 @@ measured state, 96 paired seeds × 300 decisions, review 0.25:
 - **Boredom is now a state the model can express.** It is sustained `|δ| ≈ 0`: a trained
   person on an easy question has `(1 − p) → 0`, so being shown they were right confirms
   an expectation and pays nothing. Feedback holds attention only when the outcome was
-  uncertain, which is why the target and the feedback switch
-  interact.
+  uncertain, which is why the target and the feedback switch interact.
 
 **What it gives up** is a person *spurred on* by a visible miss. `b_seen > 0` was the only
 way to express that sign; under pure RPE a seen miss is negative for everyone, in
@@ -833,8 +896,8 @@ five, and places two well.
 
 The conclusion the table was built for is unchanged. Adding answer and skip times to the
 decisions still makes `f` worse (0.049 → 0.066), and on their own they still cannot
-place it. The reason is structural. A question's value, `p(1 − p)`, hardly varies across questions, while its cost, `1/p`,
-varies about 4×, so skip times mostly measure `k`, and the redo prompts already carry
+place it. A question's value, `p(1 − p)`, hardly varies across questions, while its
+cost, `1/p`, varies about 4×, so skip times mostly measure `k`, and the redo prompts already carry
 that. On the first real player the joint fit was harmful: their fast skips moved `f`
 from 3.0 to 0.0. So the controller fits `f` and `k` from decisions, and uses time on
 questions only for patience.
@@ -847,10 +910,10 @@ patience`):
 
 | true patience | fitted, range over 3 reps | give-ups per person |
 |---|---|---|
-| 2 s | 2.5–2.8 s | 24–42 |
-| 5 s | 3.8–5.4 s | 26–66 |
-| 10 s | 9.1–16.4 s | 7–54 |
-| 20 s | 14.9–24.9 s | 2–15, and one person with none |
+| 2 s | 2.5 to 2.8 s | 24 to 42 |
+| 5 s | 3.8 to 5.4 s | 26 to 66 |
+| 10 s | 9.1 to 16.4 s | 7 to 54 |
+| 20 s | 14.9 to 24.9 s | 2 to 15, and one person with none |
 
 Across the 11 people who gave up at least once, patience was typically off by a factor
 of 1.30 with fitted `f` and `k`, against 1.26 with the true ones. The `f` estimates were
@@ -957,8 +1020,8 @@ The point below about three recoded choices stands regardless of the drift.*
 
 At high re-entry cost a learner can record 0 GOs in 200 decisions. Never engages →
 never improves → `V` stays near zero → drift stays negative → still does not engage.
-This corresponds to a documented phenomenon: the avoidance-maintained deficit cycle that
-behavioral activation therapy targets in depression. Review mode decides what an escape
+This matches the avoidance-maintained deficit cycle that behavioral activation therapy
+targets in depression. Review mode decides what an escape
 is worth: under `quiet` an escapee learns nothing, under `choice` a high-`k` escapee
 declines the redos and learns little, under `scheduled` escapes compound.
 
@@ -979,7 +1042,7 @@ at 0, as the model did until 2026-09-15, and with `T0` free.
 | 0.3 s | 0.73 | 0.72 | 0.82 | 0.80 | 0.31 |
 | 0.5 s | 0.69 | 0.68 | 0.82 | 0.80 | 0.48 |
 
-- **Pinning it costs 8–15% on both parameters**, and the bias grows with the true value.
+- **Pinning it costs 8 to 15% on both parameters**, and the bias grows with the true value.
 - **Freeing it removes the bias.** `f` lands within 0.03 of the truth and `k` within
   0.01, at every value, and `T0` itself within 0.03.
 - **It costs almost nothing when there is none.** With a true 0 the free fit returns 0.03
@@ -1103,7 +1166,7 @@ expected. The correlation is a property of the task, not of the carry.
    for three of five simulated people; for the other two the result is undetermined.
    Given true parameters it falls detectably short of the best fixed setting for two
    people under the terminal bootstrap and three under the continuing one. What remains:
-   - **The reluctant, effort-averse person.** They play only 16–47 sets in 300 decisions,
+   - **The reluctant, effort-averse person.** They play only 16 to 47 sets in 300 decisions,
      so the controller's advantage for them is undetermined. Candidates: a stronger prior,
      or no switching until the fit settles.
    - **Establish the feedback sign flip.** Showing feedback wins at a 90% target by
@@ -1111,7 +1174,7 @@ expected. The correlation is a property of the task, not of the carry.
      low targets would settle whether the controller should ever hide it.
    - **Exploration that hurts.** A random probe can land on the one setting that drives
      a person away. Probe near the current setting, or less often once estimates settle.
-   - **The gap to the best fixed setting**, about 72–95% given true parameters. It is not
+   - **The gap to the best fixed setting**, about 72 to 95% given true parameters. It is not
      the value bootstrap, which step 3 ruled out. Untested causes: the 300-decision
      confirmation horizon, planning every 25 decisions, and the exploration probes a
      quarter of runs end on.
@@ -1168,8 +1231,8 @@ picked on held-out seeds. Ratio of mean rewards, with bootstrap SE over seeds:
 | spurred on by visible misses | 71.8% ± 19.7% | 81.4% ± 7.9% | +9.6% ± 21.2%, undetermined |
 | mean over the five | 84.3% ± 8.7% | 85.4% ± 5.9% | +1.0% ± 10.5%, undetermined |
 
-- **The hypothesis is eliminated.** The range is 72–103% under the terminal bootstrap and
-  74–95% under the continuing one, so it did not move upward. Every per-person difference
+- **The hypothesis is eliminated.** The range is 72 to 103% under the terminal bootstrap and
+  74 to 95% under the continuing one, so it did not move upward. Every per-person difference
   is inside 2 SE, and the pooled difference is +1.0% ± 10.5%. The terminal bootstrap is
   not what keeps the true-parameter controller below the best fixed setting.
 - **The gap is real, and belongs to the planner.** Under the continuing bootstrap it is
@@ -1177,9 +1240,9 @@ picked on held-out seeds. Ratio of mean rewards, with bootstrap SE over seeds:
   put-off person, and −44.6 ± 19.7 for the spurred-on person. The candidates left are the
   planner's own: its 300-decision confirmation horizon, planning every 25 decisions, and
   exploration probes (a quarter of runs end on one).
-- **The baseline was re-measured first.** The "84–99%" this was to be compared against
+- **The baseline was re-measured first.** The "84 to 99%" this was to be compared against
   came from 2 seeds at `T_DUR = 3.0`, with the best setting picked on the scored seeds.
-  Re-measured with 8 seeds under the terminal bootstrap it is 72–103%, and that is the
+  Re-measured with 8 seeds under the terminal bootstrap it is 72 to 103%, and that is the
   comparison above.
 - **Everything earns more under the continuing bootstrap.** Value is larger, so even the
   fixed default earns more: 54.6 → 74.5 for f 0.8, k 0.8, and 16.3 → 30.0 for
