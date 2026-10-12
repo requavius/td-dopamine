@@ -6,6 +6,7 @@ conditions are on one scale. The give-up node's are in persistence.conditions.
 import numpy as np
 
 from .competence import success_prob
+from .confidence import perceived
 from .params import ModelState, UserParams
 from .value import V
 
@@ -47,6 +48,7 @@ def stage_conditions(state: ModelState, p: UserParams, s: int, item=None) -> tup
     # This slot's discounted share of the reward, plus the error just taken at it: the
     # node fires on a miss the person was shown, so that error is the miss landing.
     value = (1.0 / state.stage_amt) * (p.g ** remaining) + carried_delta(state.slot_delta)
-    p_item = success_prob(state, s if item is None else item)
+    # The chance as they see it: confidence shifts it (0 leaves it as it is).
+    p_item = perceived(success_prob(state, s if item is None else item), state.confidence)
     expected_attempts = min(1.0 / max(p_item, 1e-3), MAX_REPEAT_ATTEMPTS)  # cost of insisting on it
     return value, REPEAT_COST_SCALE * expected_attempts

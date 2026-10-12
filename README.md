@@ -740,6 +740,10 @@ python -m temporal recovery --mode patience
 # Human decision times against the deadline
 python -m temporal audit
 
+# Confidence: can it be estimated, and does the controller decide better with it?
+python -m temporal.confidence_check recovery   # about 20 min
+python -m temporal.confidence_check compare    # about 70 min
+
 # Regression tests: seeded runs of the model, both controllers and the app, pinned in
 # tests/golden.json. Re-record with --record only when a change is meant to alter output.
 uv run pytest
@@ -767,11 +771,13 @@ temporal/
     value.py          TD value of a set, and when a slot's reward lands
     competence.py     chance of a right answer, and how it grows
     persistence.py    giving up on a question: quit drift, patience, closed-form likelihood
+    confidence.py     what a person believes their chance is, and how outcomes move it
     questions.py      question types, their priors, and per-person Elo ratings
     simulation.py     the simulated learner: sets, review, redo prompts, start decisions
   inference.py      sample construction, censoring, the two-parameter fit, sanity checks
   recovery.py       data generation and recovery pipelines, including persistence and patience
   controller.py     Controller (plans for reward) and InfoController (plans to measure f and k)
+  confidence_check.py  recovery and controller comparison for confidence, with pass conditions
   plots.py          recovery figures
   app/              the playable task
     session.py        the rules of a session, shared by both frontends
@@ -1375,3 +1381,77 @@ the app runs, how the code is organised, how it is checked, and how fast it plan
 - **Dependencies** are the eight packages the code imports, with pytest and ruff as dev
   tools. The other 22 of the 32 earlier pins were dependencies of dependencies, or
   optional pyddm backends this code never calls (`pybads`, `gpyreg`, `pathos`).
+
+## Confidence: since 2026-10-12
+
+A person works on a question as if their chance of getting it right were
+`p_hat = sigmoid(logit(p) + c)`, where `p` is the chance the environment predicts and `c`
+is their confidence (`model/confidence.py`). Outcomes move `c` at a per-person rate `eta`:
+
+```
+elo     c += eta · (outcome − p_hat)                    surprise-weighted
+count   c = (c + eta · (outcome − ref)) · (1 − 0.05)    wins and losses against a reference rate
+```
+
+A skip is an outcome of 0, and `|c| ≤ 3`. `p_hat` replaces `p` in what a question is worth
+and costs when deciding whether to give up, and in the redo cost. Rewards, the TD value
+and start decisions are unchanged: what a set earns is what the environment measured.
+The reason for it: one player's skips doubled after a miss (41% vs 15% on the next
+question, n = 17 vs 34, Fisher p = 0.08), and a model without it cannot represent a run of
+failures making the next hard question less likely to be attempted.
+
+**Off, it is no change at all.** `eta = 0` is the default; `c` then stays exactly 0 and
+every quantity is bit-for-bit as before. All ten golden scenarios pass unchanged.
+
+**Estimating it.** With `confidence=True`, a controller weighs seven hypotheses
+(`confidence.HYPOTHESES`: none, elo 0.5 and 1.0, count 0.5 and 1.0 at reference 0.65 and
+0.85; prior 0.5 on none). Each one rebuilds `c` from the logged chances and outcomes, then
+scores the give-up times (with its own best patience) and the redo decisions; start
+decisions do not depend on `c`. f, k and T0 come from the unchanged fit. Rollouts draw a
+hypothesis per seed from the posterior, with `c` brought up to the latest question. It is
+off by default, so the app's controller is unchanged. `measured()` now zeroes the
+person's confidence, since an environment cannot observe it.
+
+**Recovery** (`confidence_check recovery`; 3 (f, k) people × 6 types × 4 seeds, 300 start
+decisions under a redo-prompt setting). Pass conditions were fixed before the run.
+
+| type | called none | right hypothesis | f RMSE | k RMSE |
+|---|---|---|---|---|
+| none | 1.00 | 1.00 | 0.029 | 0.105 |
+| elo 0.5 | 0.67 | 0.33 | 0.030 | 0.051 |
+| elo 1.0 | 0.08 | 0.67 | 0.028 | 0.062 |
+| count 1.0 / 0.65 | 0.00 | 0.92 | 0.054 | 0.053 |
+| count 0.5 / 0.85 | 0.00 | 0.92 | 0.034 | 0.041 |
+| asym 1.0 (not a hypothesis) | 0.00 | — | 0.030 | 0.054 |
+
+- **People with none are called none: 1.00, pass (≥ 0.95).**
+- **Strong modelled confidence gets the right hypothesis: 0.79, fail (≥ 0.80)**, by one
+  case in 24. The misses are mostly elo 1.0 read as elo 0.5: dynamics found, strength
+  underestimated. Mild elo (0.5) is called none two times in three.
+
+**Does the controller decide better?** (`confidence_check compare`.) `InfoController`
+with and without confidence on the same 36 people and seeds (the 18 above × 2 seeds),
+300 start decisions, nothing given. To keep it near an hour it uses the regression test's
+20-setting subset and refits every 150 decided rows instead of 15, for both.
+
+| type (6 people each) | reward, with − without |
+|---|---|
+| asym 1.0 (not a hypothesis) | +51.8 ± 13.0 |
+| elo 1.0 | +35.2 ± 7.9 |
+| count 0.5 / 0.85 | +13.9 ± 5.6 |
+| none | +13.5 ± 7.8 |
+| elo 0.5 | +7.7 ± 12.4 |
+| count 1.0 / 0.65 | +7.0 ± 30.6 |
+
+- **P1, reward gain beyond 2 SE: pass.** 165.7 → 187.2, +21.5 ± 6.4 (+13%, 3.4 SE).
+- **P2, people with none not worse beyond 2 SE: pass** (+13.5 ± 7.8).
+- **P3, f and k recovery not worse beyond 2 SE: pass.** f RMSE 0.040 → 0.050 (1.8 SE,
+  watch it), k RMSE 0.045 → 0.044.
+
+**What this does not show.** Six people per type, so the per-type rows are rough. The
+full 96 settings and the app's refit schedule were not run. The people were built from the
+modelled kinds of confidence (plus one unmodelled rule); whether real people have
+confidence dynamics at all is untested, and if they do not, the expected gain is about
+zero. The app does not log the outcome order and question index this fit replays, so it
+cannot yet be used on human data.
+
