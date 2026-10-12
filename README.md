@@ -274,6 +274,44 @@ move value and cost in directions the data has not covered yet.
   redo-prompt setting on 93% of its updates. Random probing over the same 96 settings
   picked one 11% of the time and saw about 5 redo prompts per person.
 
+**Measuring costs no detectable reward (2026-10-11).** Four ways of choosing settings were
+run on the same 32 simulated people: a 4 × 4 grid of f and k in {0.2, 0.6, 1.0, 1.5}, 2
+seeds each. Each run had 300 start decisions, the question-type task, and skips on, and
+the controllers never saw the true f and k. Settings: γ = 0.9, `ACHIEVEMENT_SCALE = 4`,
+continuing bootstrap, `T_DUR = 7.0`. Pass conditions were fixed before the run, in
+`controller_compare.py`, and the measuring rows are info_design2's `bayes_redo` rows. The
+port check reproduced those rows' simulated decisions, reward and redo prompts exactly;
+the fits matched to within 1e-4.
+
+| how settings were chosen | f RMSE | k RMSE | total reward | P(start next set) | redo settings chosen |
+|---|---|---|---|---|---|
+| fixed default | 0.093 | 0.310 | 60.0 | 0.64 | 0% |
+| for reward, 84 scheduled-review settings (the app's controller until 2026-10-11) | 0.054 | 0.293 | 147.0 | 0.76 | 0% |
+| for reward, all 96 settings | 0.056 | 0.223 | 142.7 | 0.75 | 35% |
+| for information, all 96 (`InfoController`) | **0.038** | **0.046** | **152.4** | 0.75 | 93% |
+
+Paired differences over the 32 people (same people and seeds); a difference counts only
+beyond 2 SE:
+
+- **P1 passes.** Squared error in k, measuring − reward planning (96 settings), was
+  −0.0477 ± 0.0232. That is just past 2 SE (0.0464), so it is a narrow pass. For f it was
+  −0.0017 ± 0.0013, undetermined, so f is not worse. Against the app's previous controller
+  the k gain is clearer: −0.0837 ± 0.0322 (2.6 SE).
+- **P2 passes.** Reward, measuring − fixed default: +92.4 ± 9.1.
+- **Measuring cost no detectable reward.** Measuring − reward planning: +9.7 ± 10.2, and
+  measuring − previous controller: +5.5 ± 10.1. Both are undetermined, and both point
+  estimates favor measuring.
+- **Fixing the reward controller's rollouts changed little.** Reward, 96 − 84 settings:
+  −4.3 ± 3.7. k squared error: −0.0360 ± 0.0395. Both are undetermined. Given redo
+  prompts it used them on 35% of updates (28 redo decisions per person, against 338 for
+  measuring).
+- **Reward planning leaves k poorly identified.** At 0.22 to 0.29 RMSE, k is barely
+  better than with the fixed default (0.31). k came out below 0.05 for 3 of 32 people
+  under the previous controller and 1 under the 96-setting one, all with true k = 0.2.
+  None did under measuring. That fits the reason the measuring controller exists: reward
+  planning settles on a setting, so cost stops varying. This run did not log cost spread,
+  so it does not test that reason directly.
+
 ---
 
 ## Model structure
