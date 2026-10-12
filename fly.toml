@@ -1,4 +1,4 @@
-# Fly.io deployment of web.py. First time: fly launch --copy-config --no-deploy, then
+# Fly.io deployment of temporal/app/web.py. First time: fly launch --copy-config --no-deploy, then
 # fly volumes create temporal_data --size 1, fly secrets set TEMPORAL_RESEARCHERS=you@x.com,
 # fly deploy, fly scale count 1. See "On a website" in README.md.
 app = "temporal-task"

@@ -1,17 +1,18 @@
+"""Data-generating pipelines and parameter recovery sweeps."""
 import itertools
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from config import REENTRY_COST_HIGH, REENTRY_COST_LOW, REENTRY_COST_MID, UserParams
-from controller import Controller
-from controller import run as run_person
-from inference import assert_row_floor, fit, passages_to_frame
-from initiation import build_model
-from persistence import attempts_to_frame, fit_patience, fit_persistence
-from plots import ASSETS, plot_recovery
-from temporal_difference_model import Simulation
+from .controller import Controller
+from .controller import run as run_person
+from .inference import assert_row_floor, fit, passages_to_frame
+from .model.accumulator import build_model
+from .model.params import REENTRY_COST_HIGH, REENTRY_COST_LOW, REENTRY_COST_MID, UserParams
+from .model.persistence import attempts_to_frame, fit_patience, fit_persistence
+from .model.simulation import Simulation
+from .plots import ASSETS, plot_recovery
 
 # Crossed 2x2: value and cost vary orthogonally, which is what separates f from k.
 DESIGN = [(v, c) for v in (0.3, 1.0) for c in (0.3, 1.0)]

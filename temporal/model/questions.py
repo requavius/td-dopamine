@@ -1,8 +1,8 @@
-# Question types, and how hard each one is for one particular person.
-
-import math
+"""Question types, and Elo ratings of how hard each one is for one particular person."""
 import random
 from dataclasses import dataclass, field
+
+from .competence import sigmoid
 
 
 def _add1():
@@ -84,10 +84,6 @@ SETTLE_TYPE = 10     # answers of one type at which that type's step has halved
 TARGET_BAND = 0.1
 
 
-def sigmoid(z):
-    return 1.0 / (1.0 + math.exp(-max(-60.0, min(60.0, z))))
-
-
 # A type whose chance of being answered right is nearest `target`.
 def choose_type(probs, target, rng=random):
     gaps = [abs(p - target) for p in probs]
@@ -104,7 +100,7 @@ class Ratings:
     total: int = 0
 
     def p(self, t):
-        return sigmoid(self.ability - self.difficulty[t]) # same logit scale as the simulator
+        return float(sigmoid(self.ability - self.difficulty[t]))  # same logit scale as the simulator
 
     def probs(self):
         return [self.p(t) for t in range(N_TYPES)]

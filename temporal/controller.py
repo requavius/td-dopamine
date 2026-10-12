@@ -1,6 +1,10 @@
-# The controller: re-fit the person, roll out candidate settings, switch on a margin.
-# One simulated person: python controller.py --values 0.8,0.8
+"""The controllers: re-fit the person, roll out candidate settings, choose one.
 
+`Controller` plans for reward and switches on a margin; `InfoController` plans to
+measure f and k, within a floor on how much the person keeps working.
+
+    python -m temporal.controller --values 0.8,0.8   # one simulated person
+"""
 import argparse
 import copy
 import dataclasses
@@ -11,12 +15,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from config import PATIENCE, UserParams
-from inference import fit, passages_to_frame
-from initiation import snap_value
-from persistence import attempts_to_frame, fit_patience
-from questions import Ratings, synthetic_type_diffs
-from temporal_difference_model import Simulation
+from .inference import fit, passages_to_frame
+from .model.accumulator import DT, snap_value, solution
+from .model.params import PATIENCE, UserParams
+from .model.persistence import attempts_to_frame, fit_patience
+from .model.questions import Ratings, synthetic_type_diffs
+from .model.simulation import Simulation
 
 
 @dataclass(frozen=True)
@@ -25,20 +29,29 @@ class Environment:
     review_rate: float = 0.25
     feedback: bool = True
     return_skipped: bool = False
+    redo_prompts: bool = False  # ask whether to redo each seen miss, as the app can
+
+    @property
+    def review_mode(self):
+        return "choice" if self.redo_prompts else "scheduled"
 
     def __str__(self):
         return (f"aim {self.target_p:.0%} right, review {self.review_rate:.2f}, "
                 f"feedback {'on' if self.feedback else 'off'}, "
-                f"skipped {'come back' if self.return_skipped else 'dropped'}")
+                f"skipped {'come back' if self.return_skipped else 'dropped'}"
+                + (", redo prompts" if self.redo_prompts else ""))
 
 
 TARGETS = (0.9, 0.75, 0.6, 0.45, 0.3, 0.2)
 REVIEW_LEVELS = (0.0, 0.25, 0.5, 1.0)
 FEEDBACK_LEVELS = (True, False)
 SKIPPED_LEVELS = (False, True)
-CANDIDATES = tuple(Environment(t, r, fb, rs)
-                   for t in TARGETS for r in REVIEW_LEVELS for fb in FEEDBACK_LEVELS
-                   for rs in SKIPPED_LEVELS if r > 0 or not rs)
+SCHEDULED = tuple(Environment(t, r, fb, rs)
+                  for t in TARGETS for r in REVIEW_LEVELS for fb in FEEDBACK_LEVELS
+                  for rs in SKIPPED_LEVELS if r > 0 or not rs)
+# Misses come back only when the person asks: the redo decision, where cost varies most.
+REDO = tuple(Environment(t, 0.0, fb, False, True) for t in TARGETS for fb in FEEDBACK_LEVELS)
+CANDIDATES = SCHEDULED + REDO
 
 # Estimation guardrails: the estimate starts at a prior and earns weight with data.
 PRIOR = (0.8, 0.8)
@@ -114,11 +127,18 @@ def measured(state, ratings):
 def fork(state, params, env):
     st = copy.deepcopy(dataclasses.replace(state, initiation_passages=[], first_passage=[],
                                            persistence=[]))
-    sim = Simulation(params, review_mode="scheduled", review_rate=env.review_rate,
+    sim = Simulation(params, review_mode=env.review_mode, review_rate=env.review_rate,
                      target_p=env.target_p, feedback=env.feedback,
                      skips=True, return_skipped=env.return_skipped)
     sim.state = st
     return sim
+
+
+# Put a running simulation into `env`.
+def apply(sim, env):
+    sim.target_p, sim.review_rate = env.target_p, env.review_rate
+    sim.feedback, sim.return_skipped = env.feedback, env.return_skipped
+    sim.review_mode = env.review_mode
 
 
 # Total reward earned over `horizon` start decisions in `env`.
@@ -251,13 +271,134 @@ class Controller:
             "to_review": u.chosen.review_rate,
             "to_feedback": u.chosen.feedback,
             "to_return_skipped": u.chosen.return_skipped,
+            "to_redo_prompts": u.chosen.redo_prompts,
             "switched": u.chosen != u.previous,
             "reason": u.reason,
             "best_score": max(u.scores.values()) if u.scores else None,
         } for u in self.log])
 
 
-# Entry point for a separate process (interface.py plans off the UI thread).
+# --- Planning to measure ---------------------------------------------------------------
+# Drift is f * value - k * cost, so a decision depends on (f, k) only through its drift mu,
+# and its Fisher information about (f, k) is I_mu(mu) * [[v^2, -v c], [-v c, c^2]]. I_mu
+# covers choice, RT and undecided past the deadline, from pyddm solutions on a grid of mu.
+# A setting is scored by the rise in log det(prior + data so far + its rollouts), which
+# favours settings that move value and cost in directions the data has not covered.
+
+PRIOR_SD = 0.5  # prior spread on f and k for the information score
+DRAWS = 6       # (f, k) draws the score is averaged over
+MU_GRID = np.round(np.arange(-4.0, 4.0001, 0.05), 2)
+_I_MU = None
+
+
+def _outcome_probs(mu):
+    sol = solution(float(mu), 0.0, 1.0, 0.0)  # drift = mu * 1 - 0 * 0
+    return np.concatenate([sol.pdf("upper") * DT, sol.pdf("lower") * DT,
+                           [sol.prob_undecided()]])
+
+
+# Fisher information of one decision about its drift, on MU_GRID. Computed once.
+def i_mu_table(h=0.025):
+    global _I_MU
+    if _I_MU is None:
+        out = []
+        for mu in MU_GRID:
+            lo, mid, hi = _outcome_probs(mu - h), _outcome_probs(mu), _outcome_probs(mu + h)
+            dp = (hi - lo) / (2 * h)
+            keep = mid > 1e-12
+            out.append(float(np.sum(dp[keep] ** 2 / mid[keep])))
+        _I_MU = np.array(out)
+    return _I_MU
+
+
+# Fisher information about (f, k) in a list of decision records.
+def fisher(passages, f, k):
+    table = i_mu_table()
+    info = np.zeros((2, 2))
+    for p in passages:
+        v, c = float(p["value"]), float(p["cost"])
+        i_mu = np.interp(f * v - k * c, MU_GRID, table)
+        info += i_mu * np.array([[v * v, -v * c], [-v * c, c * c]])
+    return info
+
+
+def logdet(m):
+    return float(np.linalg.slogdet(m)[1])
+
+
+class InfoController(Controller):
+    """Chooses the setting that would most sharpen the (f, k) estimate.
+
+    It plans for every person the data still allows, not one: the score is averaged over
+    DRAWS (f, k) from the prior until the fit is used (MIN_ROWS), then from a Laplace
+    approximation N(estimate, (prior + data information)^-1). Each draw is rolled out
+    with its own parameters. Safety: a setting is eligible only if its rollouts start at
+    least `safety` times as many sets as the best setting's.
+    """
+
+    def __init__(self, horizon=25, safety=0.5, **kw):
+        super().__init__(**kw)
+        self.info_horizon = horizon  # start decisions per rollout
+        self.safety = safety
+        self.np_rng = np.random.default_rng(kw.get("seed", 0))
+
+    def _draws(self, est, info):
+        if info is None:  # the fit is not used yet: the prior is all there is
+            mean, cov = np.array(PRIOR), np.eye(2) * PRIOR_SD ** 2
+        else:
+            mean = np.array([est.f, est.k])
+            cov = np.linalg.inv(np.eye(2) / PRIOR_SD ** 2 + info)
+        return np.clip(self.np_rng.multivariate_normal(mean, cov, size=DRAWS), 0.05, 2.5)
+
+    def _plan(self, state, params):
+        rows = decided_rows(state)
+        if self.known is not None:
+            self.est = Estimate(*self.known[:2], rows=rows, note="known (test)")
+        elif self.est is None or rows - self.rows_at_fit >= self.refit_every:
+            self.est = estimate(state, self.est)
+            self.rows_at_fit = rows
+        est = self.est
+        data = state.initiation_passages + state.first_passage
+        if self.known is not None:
+            draws = np.array([self.known[:2]] * DRAWS)
+        else:
+            used = rows >= MIN_ROWS and est.raw is not None
+            draws = self._draws(est, fisher(data, est.f, est.k) if used else None)
+        bases = [np.eye(2) / PRIOR_SD ** 2 + fisher(data, f, k) for f, k in draws]
+
+        scores, sets = {}, {}
+        for env in self.candidates:
+            gains, started = [], []
+            for (f, k), base in zip(draws, bases):
+                model = UserParams(f=snap_value(f), k=snap_value(k), g=params.g, a=params.a,
+                                   patience=est.patience)
+                sim = fork(state, model, env)
+                seed = self.rng.randrange(2**31)
+                random.seed(seed)
+                np.random.seed(seed)
+                e0 = sim.state.episodes
+                for _ in range(self.info_horizon):
+                    went = sim.initiate()
+                    sim.state.t += 1
+                    if went:
+                        sim.run_episode()
+                ps = sim.state.initiation_passages + sim.state.first_passage
+                gains.append(logdet(base + fisher(ps, f, k)) - logdet(base))
+                started.append(sim.state.episodes - e0)
+            scores[env], sets[env] = float(np.mean(gains)), float(np.mean(started))
+        floor = self.safety * max(sets.values())
+        chosen = max((e for e in self.candidates if sets[e] >= floor), key=scores.get)
+
+        previous = self.env
+        self.env = chosen
+        self.last_plan = len(state.initiation_passages)
+        update = Update(len(state.initiation_passages), est, previous, chosen,
+                        f"information +{scores[chosen]:.2f} over {DRAWS} draws", scores)
+        self.log.append(update)
+        return update
+
+
+# Entry point for a separate process (the app plans off the UI thread).
 def plan_in_worker(controller, state, params):
     update = controller.plan(state, params)
     return controller, update
@@ -272,8 +413,9 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
     start = controller.env if controller else env
     ratings = Ratings()
     sim = Simulation(params, reentry_cost=reentry_cost, review_rate=start.review_rate,
-                     target_p=start.target_p, feedback=start.feedback, ratings=ratings,
-                     skips=skips, return_skipped=start.return_skipped)
+                     review_mode=start.review_mode, target_p=start.target_p,
+                     feedback=start.feedback, ratings=ratings, skips=skips,
+                     return_skipped=start.return_skipped)
     st = sim.state
     truth = type_diffs if type_diffs is not None else synthetic_type_diffs(spread)
     st.type_diffs = np.array(truth, dtype=float) # hidden from the controller
@@ -288,10 +430,7 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
             sim.run_episode()
         if controller is not None and controller.due(st):
             controller.plan(measured(st, ratings), params)
-            sim.target_p = controller.env.target_p
-            sim.review_rate = controller.env.review_rate
-            sim.feedback = controller.env.feedback
-            sim.return_skipped = controller.env.return_skipped
+            apply(sim, controller.env)
     return sim
 
 
@@ -307,20 +446,24 @@ def main():
     fixed = run(params, env=Environment(), n_decisions=args.decisions, seed=args.seed)
     ctrl = Controller(seed=args.seed, refit_every=60)
     steered = run(params, controller=ctrl, n_decisions=args.decisions, seed=args.seed)
+    info = InfoController(seed=args.seed)
+    measuring = run(params, controller=info, n_decisions=args.decisions, seed=args.seed)
 
     print(f"person f={f} k={k}, {args.decisions} decisions, seed {args.seed}\n")
     print(f"{'':>12} {'reward':>7} {'sets':>6} {'skips':>6} {'corrections':>12} {'ability':>8}")
-    for name, sim in (("fixed", fixed), ("controller", steered)):
+    for name, sim in (("fixed", fixed), ("reward", steered), ("measure", measuring)):
         st = sim.state
         print(f"{name:>12} {st.total_reward:7.1f} {st.episodes:6d} {st.skips:6d} "
               f"{st.corrections:12d} {st.ability:8.2f}")
     print(f"(fixed = {Environment()})")
-    if ctrl.log:
-        print(f"\ncontroller updates ({len(ctrl.log)}):")
-        with pd.option_context("display.width", 240, "display.max_colwidth", 70):
-            print(ctrl.log_frame()[["decision", "rows", "f_used", "k_used", "to_target",
-                                    "to_review", "to_feedback", "to_return_skipped",
-                                    "switched", "reason"]].round(2).to_string(index=False))
+    for name, c in (("reward", ctrl), ("measure", info)):
+        if c.log:
+            print(f"\n{name} controller updates ({len(c.log)}):")
+            with pd.option_context("display.width", 240, "display.max_colwidth", 70):
+                print(c.log_frame()[["decision", "rows", "f_used", "k_used", "to_target",
+                                     "to_review", "to_feedback", "to_return_skipped",
+                                     "to_redo_prompts", "switched", "reason"]]
+                      .round(2).to_string(index=False))
 
 
 if __name__ == "__main__":

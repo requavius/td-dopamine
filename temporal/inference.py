@@ -1,15 +1,16 @@
+"""Fitting (f, k) to decisions, with undecided trials kept as data."""
 from collections import Counter
 
 import numpy as np
 import pandas as pd
 import pyddm
 
-from initiation import T_DUR, build_model
-from persistence import neg_log_likelihood
+from .model.accumulator import T_DUR, build_model
+from .model.persistence import neg_log_likelihood
 
 ROW_FLOOR = 400
 # `value` already carries the prediction error out of the last set, so the conditions
-# are the whole of the drift (initiation.initiation_drift).
+# are the whole of the drift (accumulator.initiation_drift).
 CONDITIONS = ("value", "cost")
 # Fitted non-decision time. The upper end stays under the fastest decision in the data.
 T0_BOUNDS = (0.0, 0.5)

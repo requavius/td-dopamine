@@ -1,9 +1,10 @@
+"""Recovery plots."""
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-ASSETS = Path(__file__).parent / "assets"
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 PANELS = [
     ("f", "f_true", "f_hat", "reward sensitivity", "#2196F3"),

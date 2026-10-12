@@ -1,25 +1,17 @@
+"""The simulated learner: plays sets, decides whether to start and redo, gives up."""
 import random
 
 import numpy as np
 
-from config import (
-    ACHIEVEMENT_SCALE,
-    SESSION_EXIT_STREAK,
-    ModelState,
-    UserParams,
-    cost_components,
-    draw_outcome,
-    settle_skipped,
-    slot_reward,
-    stage_conditions,
-    success_prob,
-    update_ability,
-    value_at_choice_point,
-    value_of_stage,
-)
-from initiation import initiation_decision, stage_decision
-from persistence import conditions, draw_quit_time, draw_solve_seconds, quit_drift
-from questions import choose_type, sigmoid
+from .accumulator import initiation_decision, stage_decision
+from .competence import draw_outcome, settle_skipped, sigmoid, success_prob, update_ability
+from .conditions import cost_components, stage_conditions, value_at_choice_point
+from .params import ModelState, UserParams
+from .persistence import conditions, draw_quit_time, draw_solve_seconds, quit_drift
+from .questions import choose_type
+from .value import ACHIEVEMENT_SCALE, slot_reward, value_of_stage
+
+SESSION_EXIT_STREAK = 3  # consecutive non-GO draws before the learner has left
 
 # Who decides whether a missed question comes back: the controller at review_rate per
 # slot (scheduled), the learner at the repeat node (choice), or nobody (quiet).
@@ -115,9 +107,21 @@ class Simulation:
             probs = [sigmoid(state.ability - float(d)) for d in state.type_diffs]
         return choose_type(probs, self.target_p)
 
+    # The redo prompt after a miss at slot `s`. True if they take the question again.
+    def _redoes(self, s, item):
+        state, p = self.state, self.params
+        value, cost = stage_conditions(state, p, s, item)
+        choice = stage_decision(value, cost, p.f, p.k, t0=p.t0)
+        choice["stage"] = s
+        choice["item"] = item
+        choice["episode_id"] = state.episodes + state.abandoned + 1
+        choice["timestep"] = state.t
+        state.first_passage.append(choice)
+        return choice["resolved"] == 1
+
     # One episode: exactly `stage_amt` slots, one question each.
     def run_episode(self):
-        state, p = self.state, self.params
+        state = self.state
         last = state.stage_amt - 1
         cold, self.cold_start = self.cold_start, False
 
@@ -187,16 +191,8 @@ class Simulation:
 
             # The redo node fires after the error, not before it: they see the miss,
             # that lands, and then they decide whether to take the question again.
-            if missed_new and self.review_mode == "choice":
-                value, cost = stage_conditions(state, p, s, item)
-                choice = stage_decision(value, cost, p.f, p.k, t0=p.t0)
-                choice["stage"] = s
-                choice["item"] = item
-                choice["episode_id"] = state.episodes + state.abandoned + 1
-                choice["timestep"] = state.t
-                state.first_passage.append(choice)
-                if choice["resolved"] == 1:
-                    carry = item
+            if missed_new and self.review_mode == "choice" and self._redoes(s, item):
+                carry = item
 
         # What the next start decision sees of the set just played.
         n = state.stage_amt

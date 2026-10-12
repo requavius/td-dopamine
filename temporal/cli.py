@@ -1,11 +1,19 @@
+"""Command line: simulate one learner, run recovery sweeps, audit human decision times.
+
+    python -m temporal run --values 0.8,0.8
+    python -m temporal recovery --mode single
+    python -m temporal audit
+"""
 import argparse
 import json
 
 import pandas as pd
 
-from config import COST_PROFILES, UserParams, value_at_choice_point
-from inference import DEADLINE_TOLERANCE, audit_rts, sanity_check, sanity_check_coupled
-from recovery import (
+from .inference import DEADLINE_TOLERANCE, audit_rts, sanity_check, sanity_check_coupled
+from .model.conditions import value_at_choice_point
+from .model.params import COST_PROFILES, UserParams
+from .model.simulation import REVIEW_MODES, Simulation
+from .recovery import (
     DESIGN,
     GRID,
     PATIENCE_GRID,
@@ -22,7 +30,6 @@ from recovery import (
     recovery_t0,
     simulate_dataset,
 )
-from temporal_difference_model import REVIEW_MODES, Simulation
 
 
 def run_experiment(params: UserParams, cost=None, max_decisions=200, debug=False,
@@ -175,7 +182,7 @@ def cmd_audit(args):
     if share > DEADLINE_TOLERANCE:
         print(f"\n{share:.1%} of decisions are past the deadline (tolerance "
               f"{DEADLINE_TOLERANCE:.0%}): the fit discards their choices. Move T_DUR in "
-              f"initiation.py past {table['all']['max']:.2f} s.")
+              f"temporal/model/accumulator.py past {table['all']['max']:.2f} s.")
 
 
 def build_parser():
@@ -231,11 +238,13 @@ def build_parser():
     return parser
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = build_parser()
-    args = parser.parse_args()
-
+    args = parser.parse_args(argv)
     if args.command is None:
         args = parser.parse_args(["run"])
-
     args.func(args)
+
+
+if __name__ == "__main__":
+    main()

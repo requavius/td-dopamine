@@ -11,7 +11,7 @@ is shown, whether questions they gave up on come back) so that engaging becomes
 easier than stopping.
 
 This is an active research project. It runs on simulated people, and on human
-sessions played in `interface.py` that are recorded across sessions. No estimate
+sessions played in the app (`temporal/app/`) that are recorded across sessions. No estimate
 from a real person has been validated yet.
 
 ---
@@ -60,7 +60,7 @@ cost  = REPEAT_COST_SCALE · min(1/p, 8)               the effort it takes
 with `p` their chance on that question. It feeds a one-boundary accumulator (same
 `SIGMA` and `BOUND`); if it reaches the bound before they reach an answer, they give
 up. The time to give up then has a closed form, the inverse Gaussian (Wald)
-distribution (`persistence.py`). Giving up is a skip, or leaving if they close the app
+distribution (`model/persistence.py`). Giving up is a skip, or leaving if they close the app
 on that question.
 
 - **Patience is per person.** Model time becomes seconds through `patience`, the
@@ -101,20 +101,31 @@ environment so the person keeps engaging and keeps being challenged.
 Every few sets the controller re-fits the person's `f` and `k` (shrunk toward a prior
 while data is thin) and their patience from time on questions. It then copies the
 person exactly as they are (measured ability, how hard each question type is for them,
-what they still owe, their current value) and simulates 84 candidate settings forward
+what they still owe, their current value) and simulates 96 candidate settings forward
 with the *estimated* parameters:
 
 - a **target chance of getting a question right**, 90% down to 20%;
 - a **review rate**: how an unanswered question comes back;
 - **feedback shown or hidden**;
 - **whether questions they skipped come back** through review, or are dropped. With
-  review at 0 nothing comes back.
+  review at 0 nothing comes back;
+- **redo prompts**: after each miss they see, ask whether to take it again (the app's
+  "offer repeat-or-continue"). These 12 settings (6 targets × feedback) have review 0, so
+  a miss comes back only when the person chooses it.
+
+Until 2026-10-11 there were 84 settings, all with scheduled review, and the rollouts
+always scheduled review even though the app asks redos. The planner was simulating a
+task the person never saw. Rollouts now follow the setting's review mode.
 
 Rollouts include giving up on questions, driven by the same estimated `f` and `k` and
 the person's estimated patience, so a hard target is worth less for someone who would
 skip most of it.
 
-It screens all 84 with short rollouts (4 × 80 decisions), re-tests the best four and
+There are two controllers. `Controller`, described here, plans for reward.
+`InfoController` (see "Planning to measure") plans to measure `f` and `k`, and is the one
+the app runs.
+
+It screens all candidates with short rollouts (4 × 80 decisions), re-tests the best four and
 the current setting with long rollouts on fresh seeds (16 × 300), and switches to the
 one earning the most **total reward** only if that re-test beats the current setting
 by more than twice its standard error. Short rollouts alone were too noisy to act on.
@@ -238,6 +249,31 @@ Verdicts under the rule (paired difference over the 8 seeds; a win or loss only 
   random probe. Whether probes cost reward was not tested, so the earlier claim that they
   do is withdrawn.
 
+### Planning to measure (`InfoController`, since 2026-10-11)
+
+A controller that plans for reward settles on one setting, and once it does, cost stops
+varying and `k` stops being identified. `InfoController` instead picks the setting
+whose rollouts would most sharpen the `(f, k)` estimate.
+
+Drift is `f · value − k · cost`, so a decision depends on `(f, k)` only through its
+drift `μ`, and its Fisher information about `(f, k)` is
+`I_μ(μ) · [[v², −vc], [−vc, c²]]`. `I_μ` covers choice, RT and undecided past the
+deadline, and is computed once from pyddm solutions on a grid of `μ`. A setting scores
+the rise in `log det(prior + data so far + its rollouts)`, which favours settings that
+move value and cost in directions the data has not covered yet.
+
+- **It plans for every person the data still allows, not one.** The score is averaged
+  over 6 `(f, k)` draws: from the prior (`PRIOR`, sd 0.5) until the fit is used, then
+  from a Laplace approximation, `N(estimate, (prior + data information)⁻¹)`. Each draw
+  is rolled out with its own parameters (25 start decisions per rollout). Planning for
+  the single current estimate collected the best data for the wrong person early on.
+- **Safety floor.** A setting is eligible only if its rollouts start at least half as
+  many sets as the best setting's, so measuring cannot drive the person away.
+- **It found the redo prompts on its own.** The redo decision is where cost varies most
+  (`0.15 · min(1/p, 8)`, about 4× across difficulties), and the controller chose a
+  redo-prompt setting on 93% of its updates. Random probing over the same 96 settings
+  picked one 11% of the time and saw about 5 redo prompts per person.
+
 ---
 
 ## Model structure
@@ -249,7 +285,7 @@ inverts all three.
 
 A staged task. Each set is `stage_amt` slots (default 4), one question in each.
 
-**Question types, rated per person** (`questions.py`). Questions come in types, each
+**Question types, rated per person** (`model/questions.py`). Questions come in types, each
 with a rough prior difficulty in logits:
 
 | type | example | prior |
@@ -292,9 +328,9 @@ the question is rated as answered right, it is not owed, and it does not count a
 miss. The first player's log had six wrong-then-right redos;
 two were fixed in under a second (11 + 20 → 21, then 31 in 0.4 s).
 
-The recovery pipelines in `main.py` still use the older single-`diff` task (with
+The recovery pipelines (`python -m temporal recovery`) still use the older single-`diff` task (with
 optional per-stage `diff_spread`); question types are used by `controller.py`'s
-simulated people and by `interface.py`.
+simulated people and by the app.
 
 **What a set is worth.** The reward at the end of a set is its right answers, each
 weighted by how hard it was, times a scale:
@@ -370,7 +406,7 @@ bootstrap (see "Value bootstrap").
 worth lands at that slot: `(1 − p)` if they got it right, nothing if they did not.
 With feedback off nothing lands until the end-of-set score, which pays the whole set at
 once. A set totals the same either way: feedback moves *when* the signal arrives, not
-how much (`config.slot_reward`). That timing is the whole of feedback's effect on
+how much (`value.slot_reward`). That timing is the whole of feedback's effect on
 motivation, and it is what the three reaction terms used to stand in for.
 
 With feedback hidden this is exactly the old schedule, one lump of
@@ -391,12 +427,12 @@ ability   += CORRECTION_GAIN   only when a question answered wrong (or skipped)
 ```
 
 A first-time correct answer teaches nothing, and neither does a failure; only a
-correction does (`config.update_ability`, `config.settle_skipped`). This is deliberate practice rather than
+correction does (`competence.update_ability`, `competence.settle_skipped`). This is deliberate practice rather than
 error correction: working a question out between sessions, without being shown it
 again, teaches nothing here.
 
 **Measured versus simulated competence.** For a real person there is nothing to
-simulate: `interface.py` *measures* competence with the Elo ratings above, and the
+simulate: the app *measures* competence with the Elo ratings above, and the
 controller's rollouts start from that measurement. The corrected-question rule is
 how a simulated person's true ability changes; the ratings are what the environment
 can know about it. The controller only ever sees the ratings, never a simulated
@@ -486,7 +522,7 @@ discarded; see "Censored trials are data".
 
 ---
 
-## Human sessions (`interface.py`)
+## Human sessions (`temporal/app/`)
 
 You answer the questions, choose whether to redo one you got wrong, and choose
 whether to start the next set. There is no countdown: both prompts wait for you, and
@@ -567,10 +603,10 @@ A redo in the interface is an extra question rather than the next slot, so a hum
 set can run past `stage_amt` questions and its review load can exceed 1; in the
 simulator's `choice` mode a redo takes the next slot.
 
-### On a website (`web.py`)
+### On a website (`temporal/app/web.py`)
 
-`python web.py` serves the same task in a browser at `http://127.0.0.1:8000`. The
-browser only draws screens and times them; every rule is `interface.App`'s, run on the
+`python -m temporal.app.web` serves the same task in a browser at `http://127.0.0.1:8000`. The
+browser only draws screens and times them; every rule is `session.Session`'s, run on the
 server by a subclass that sends its screens to the page instead of Tk. Nothing about
 the task, the record or the inference is re-implemented.
 
@@ -578,7 +614,7 @@ the task, the record or the inference is re-implemented.
 approval first, so by default (`TEMPORAL_COLLECT=0`) nobody else's data is kept:
 
 - The start screen shows the consent information
-  (a **draft**, in `web/index.html`, to be replaced with the approved wording), and
+  (a **draft**, in `temporal/app/static/index.html`, to be replaced with the approved wording), and
   offers two ways in: **as a guest** or **with an email**.
 - **Guests are never saved.** Their record lives in a temporary folder that is deleted
   when they leave the page.
@@ -589,7 +625,7 @@ approval first, so by default (`TEMPORAL_COLLECT=0`) nobody else's data is kept:
   "dev stuff".
 - With `TEMPORAL_COLLECT=1` anyone may take part with an email after ticking the
   consent box. The first event of each session is a `consent` record with the email,
-  whether they agreed, and `CONSENT_VERSION` (in `web.py`; bump it whenever the consent
+  whether they agreed, and `CONSENT_VERSION` (in `temporal/app/web.py`; bump it whenever the consent
   text changes).
 
 The email is not verified: anyone who types an address plays as that person. That
@@ -636,63 +672,79 @@ uv sync
 
 ```bash
 # Play it yourself. Data is kept in data/ between sessions.
-python interface.py
+python -m temporal.app.desktop
 
 # The same task in a browser, at http://127.0.0.1:8000. Only researchers' data is kept,
 # in data/web/<email>/, until TEMPORAL_COLLECT=1.
-TEMPORAL_RESEARCHERS=you@example.com python web.py
+TEMPORAL_RESEARCHERS=you@example.com python -m temporal.app.web
 
-# One simulated person: a fixed setting vs the controller
-python controller.py --values 0.8,0.8
+# One simulated person: a fixed setting vs the reward and measuring controllers
+python -m temporal.controller --values 0.8,0.8
 
 # One simulated learner on the single-diff task
-python main.py run --values 0.8,0.8
+python -m temporal run --values 0.8,0.8
 
 # Parameter recovery from ONE learner (the default)
-python main.py recovery --mode single
+python -m temporal recovery --mode single
 
 # Parameter recovery from two learners pooled at different cold-start costs
-python main.py recovery --mode coupled
+python -m temporal recovery --mode coupled
 
 # Parameter recovery, value as a fixed design constant (the reference)
-python main.py recovery --mode uncoupled
+python -m temporal recovery --mode uncoupled
 
 # f and k from decisions, from answer and skip times, and from both
-python main.py recovery --mode persistence
+python -m temporal recovery --mode persistence
 
 # patience, estimated the way the controller does
-python main.py recovery --mode patience
+python -m temporal recovery --mode patience
+
+# Human decision times against the deadline
+python -m temporal audit
+
+# Regression tests: seeded runs of the model, both controllers and the app, pinned in
+# tests/golden.json. Re-record with --record only when a change is meant to alter output.
+uv run pytest
 ```
 
-Bare `python main.py` is shorthand for `python main.py run`.
+Bare `python -m temporal` is shorthand for `python -m temporal run`.
 
 For `run`: `--values` takes `f,k`; `--cost` picks the cold-start profile; `--review-mode`
 and `--review-rate` set review; `--diff-spread` sets per-stage difficulty spread;
 `--decisions` caps the number of start decisions. For `recovery`: `--mode` picks the
-pipeline and `--reps` sets repetitions per grid point. For `controller.py`:
+pipeline and `--reps` sets repetitions per grid point. For `temporal.controller`:
 `--values`, `--decisions`, `--seed`.
 
 ---
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `main.py` | Entry point for single runs and recovery sweeps. |
-| `config.py` | Hyperparameters, `UserParams` / `ModelState`, value, competence, cost. |
-| `questions.py` | Question types, their priors, and per-person Elo ratings. |
-| `temporal_difference_model.py` | The simulated learner: sets, review, reward, the start decision. |
-| `initiation.py` | The accumulator: the drift, the model, one live draw. |
-| `persistence.py` | Giving up on a question: quit drift, per-person patience, closed-form likelihood with censored answers and lapses, simulated solve and quit times. |
-| `inference.py` | Sample construction, censoring, the two-parameter `fit`, optionally joint with persistence, sanity checks. |
-| `recovery.py` | Data generation and recovery pipelines, including persistence and patience. |
-| `controller.py` | Re-fits the person, simulates candidate settings from their current state, switches to the one earning the most reward. |
-| `interface.py` | Human-playable version: no countdown, stop closes the app, persistent record. |
-| `web.py`, `web/index.html` | The same app served to a browser: start screen, consent, guest or email, one record per email. |
-| `Dockerfile`, `fly.toml` | Hosting `web.py`; data in a volume at `/data`. |
-| `plots.py` | Recovery figures. |
-| `data/` | Human session record (created by `interface.py`, gitignored). |
-| `assets/` | Generated figures. |
+```
+temporal/
+  cli.py            entry point (python -m temporal): single runs, recovery sweeps, audit
+  model/            the person, as the environment models them
+    params.py         UserParams (f, k, discount, learning rate, patience, T0) and ModelState
+    accumulator.py    the drift-diffusion process behind start and redo decisions; cached solves and draws
+    conditions.py     the (value, cost) each decision node feeds it
+    value.py          TD value of a set, and when a slot's reward lands
+    competence.py     chance of a right answer, and how it grows
+    persistence.py    giving up on a question: quit drift, patience, closed-form likelihood
+    questions.py      question types, their priors, and per-person Elo ratings
+    simulation.py     the simulated learner: sets, review, redo prompts, start decisions
+  inference.py      sample construction, censoring, the two-parameter fit, sanity checks
+  recovery.py       data generation and recovery pipelines, including persistence and patience
+  controller.py     Controller (plans for reward) and InfoController (plans to measure f and k)
+  plots.py          recovery figures
+  app/              the playable task
+    session.py        the rules of a session, shared by both frontends
+    store.py          the record on disk: append-only log, snapshot, saved controller
+    desktop.py        the Tk window
+    web.py            the same session served to a browser; static/index.html draws it
+tests/              seeded regression tests (golden.json)
+Dockerfile, fly.toml   hosting the web app; data in a volume at /data
+data/               human session records (gitignored)
+assets/             generated figures
+```
 
 ---
 
@@ -879,7 +931,7 @@ problem; the terms had no mechanism behind them.
 
 **Skips do not help estimate `f` and `k`.** Twelve simulated people (4 profiles × 3
 reps) who can give up on questions, 300 start decisions each (human-sized data),
-settings switched at random (`python main.py recovery --mode persistence`):
+settings switched at random (`python -m temporal recovery --mode persistence`):
 
 | fitted from | f RMSE | k RMSE |
 |---|---|---|
@@ -905,7 +957,7 @@ questions only for patience.
 **Patience can be recovered, and errors in `f` do not spoil it.** Twelve simulated people
 (4 profiles × 3 reps), 300 start decisions each, settings switched at random. `f` and `k`
 were fitted from decisions; patience was then fitted from time on questions, once with
-the fitted `f` and `k` and once with the true ones (`python main.py recovery --mode
+the fitted `f` and `k` and once with the true ones (`python -m temporal recovery --mode
 patience`):
 
 | true patience | fitted, range over 3 reps | give-ups per person |
@@ -974,7 +1026,7 @@ time, against the model's deadline.
 
 ### The deadline was discarding human choices
 
-Audited on 2026-09-13 with `python main.py audit`: the first player's 26 start and redo
+Audited on 2026-09-13 with `python -m temporal audit`: the first player's 26 start and redo
 decisions, against the deadline of the time, 3.0 s.
 
 | decisions | n | median | 90th percentile | longest | past 3.0 s |
@@ -1030,7 +1082,7 @@ declines the redos and learns little, under `scheduled` escapes compound.
 The generating model and the fitted model are identical here, so successful recovery is
 expected. Real data is never generated by the fitted model.
 
-**Non-decision time is the one misspecification measured** (`python main.py recovery
+**Non-decision time is the one misspecification measured** (`python -m temporal recovery
 --mode t0`). One learner per run, 1200 decisions, 3 reps per value, `T_DUR = 7.0`,
 continuing bootstrap, true `f = k = 0.8`. Each dataset is fitted twice: with `T0` pinned
 at 0, as the model did until 2026-09-15, and with `T0` free.
@@ -1094,7 +1146,7 @@ expected. The correlation is a property of the task, not of the carry.
   data. The first player's 26 decisions put `T0` at 0.00 with a fastest decision of
   0.51 s, which cannot be told apart from a small positive value.
 - The deadline is set from one person's decisions. `T_DUR = 7.0` sits past the longest
-  RT seen so far (6.07 s); anyone slower is censored again. `python main.py audit`
+  RT seen so far (6.07 s); anyone slower is censored again. `python -m temporal audit`
   flags a share past the deadline above 2%.
 - The value range is endogenous. A stalled learner stops generating value variation,
   so there is less leverage on `f`; the worst recovery checked sat at high `k`.
@@ -1145,7 +1197,7 @@ expected. The correlation is a property of the task, not of the carry.
    controller's estimate and the interface's fit (see "Recovery demonstrates
    identifiability"). What is left is to watch it per person as sessions accumulate, and
    to move the [0, 0.5] s bound if anyone's fastest decision falls near it.
-2. Keep the deadline past human decision times: run `python main.py audit` after each
+2. Keep the deadline past human decision times: run `python -m temporal audit` after each
    batch of sessions. Done once, on 2026-09-13, which moved it from 3.0 to 7.0 s.
 3. Add across-trial drift variability (Ratcliff's `sv`).
 4. Value for a real person has an observable proxy. Under the continuing bootstrap it
@@ -1202,7 +1254,7 @@ expected. The correlation is a property of the task, not of the carry.
 This was the open question: is a set its own episode, or is the task a cycle? The start
 decision re-enters the task, so it is a cycle. A set's last slot now bootstraps from the
 start of the next set, `δ = r + γ·V(0) − V(last)`, which makes `V(0)` the fixed point of a
-recurrence over all future sets (`config.CONTINUING = True`). The old terminal bootstrap,
+recurrence over all future sets (`value.CONTINUING = True`). The old terminal bootstrap,
 `V_next = 0`, is still available for comparison. `value_at_choice_point` is still `V(0)`,
 the state being entered.
 
@@ -1247,3 +1299,41 @@ picked on held-out seeds. Ratio of mean rewards, with bootstrap SE over seeds:
 - **Everything earns more under the continuing bootstrap.** Value is larger, so even the
   fixed default earns more: 54.6 → 74.5 for f 0.8, k 0.8, and 16.3 → 30.0 for
   f 0.6, k 1.2.
+
+## Code layout, tests and speed: since 2026-10-11
+
+The model's equations did not change on 2026-10-11. What changed is which controller
+the app runs, how the code is organised, how it is checked, and how fast it plans.
+
+- **The app runs `InfoController`** (see "Planning to measure"), over 96 settings: the 84
+  scheduled-review settings plus 12 with redo prompts. Rollouts now follow each
+  setting's review mode. Before, they always scheduled review while the app asked redos.
+  A saved controller from before this change is replaced on the next launch. The
+  replacement is logged as `controller_reset`, and the estimate is refit from the record.
+- **One package, `temporal/`** (see "Files"). `config.py` was split by what each part
+  models: the person (`params`), TD value (`value`), competence, and the (value, cost)
+  each node sees (`conditions`). `interface.py` was split into the session's rules
+  (`app/session.py`), the record on disk (`app/store.py`) and the Tk window
+  (`app/desktop.py`). The web frontend subclasses the same `Session`, so both still
+  write the same record. Commands are now `python -m temporal ...` ("Running it").
+- **Regression tests** (`uv run pytest`, about 25 s). They pin seeded outputs in
+  `tests/golden.json`: the simulator under scheduled review and under redo prompts,
+  people under a fixed setting and under both controllers, a fit to designed data and
+  one to a learner, the give-up likelihood and patience, and a scripted app session
+  (48 events). They were recorded on the code before the move, and the restructured
+  code reproduces them exactly. The exceptions are fits, compared at 1e-3, because
+  pyddm's optimiser stops a few 1e-5 apart between runs. Re-record (`--record`) only
+  for a change meant to alter output, and say why in the commit.
+- **Planning is about 3× faster.** One `InfoController` plan (96 settings × 6 draws
+  × 25 decisions, f 0.8, k 0.8, after 26 decisions) took 15.3 s and now takes 4.6 s.
+  The same speedup applies to every simulation and recovery sweep. Two changes did it:
+  - A start or redo draw no longer goes through pyddm's `Solution.sample(1)`. That
+    call rebuilt its sampling tables and ran its argument-checking decorators on every
+    draw. `accumulator._draw` builds the tables once per condition and makes the same
+    calls on numpy's global generator in the same order, so every seeded run is
+    unchanged (the tests above confirm it). If pyddm is upgraded, check `_draw`
+    against `Solution.sample` again.
+  - `sigmoid` on a single number uses `math` instead of numpy.
+- **Dependencies** are the eight packages the code imports, with pytest and ruff as dev
+  tools. The other 22 of the 32 earlier pins were dependencies of dependencies, or
+  optional pyddm backends this code never calls (`pybads`, `gpyreg`, `pathos`).

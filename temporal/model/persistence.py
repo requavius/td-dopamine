@@ -1,20 +1,16 @@
-# Giving up on a question: quit drift, patience, and the Wald likelihood of the times.
-
+"""Giving up on a question: quit drift, patience, and the Wald likelihood of the times."""
 import math
 import random
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize, minimize_scalar
 from scipy.special import log_ndtr
 
-from config import (
-    ACHIEVEMENT_SCALE,
-    DELTA_CLIP,
-    MAX_REPEAT_ATTEMPTS,
-    PATIENCE,
-    REPEAT_COST_SCALE,
-)
-from initiation import BOUND, SIGMA
+from .accumulator import BOUND, SIGMA
+from .conditions import DELTA_CLIP, MAX_REPEAT_ATTEMPTS, REPEAT_COST_SCALE
+from .params import PATIENCE
+from .value import ACHIEVEMENT_SCALE
 
 LAPSE = 0.02          # share of times the model does not describe, kept from dominating the fit
 LAPSE_SECONDS = 60.0  # those times are uniform over this window
@@ -115,8 +111,6 @@ def neg_log_likelihood(f, k, frame, patience=PATIENCE, lapse=LAPSE):
 
 # This person's patience (seconds per unit of model time), with f and k given.
 def fit_patience(f, k, frame, bounds=PATIENCE_BOUNDS):
-    from scipy.optimize import minimize_scalar
-
     lo, hi = math.log(bounds[0]), math.log(bounds[1])
     grid = np.linspace(lo, hi, 25) # coarse pass in log space, since patience is a scale
     nll = [neg_log_likelihood(f, k, frame, math.exp(x)) for x in grid]
@@ -130,8 +124,6 @@ def fit_patience(f, k, frame, bounds=PATIENCE_BOUNDS):
 
 # (f, k) from persistence alone: what answer and skip times say without decisions.
 def fit_persistence(frame, patience=PATIENCE, bounds=((0.0, 3.0), (0.0, 3.0))):
-    from scipy.optimize import minimize
-
     best = None
     for x0 in ((0.5, 0.5), (1.5, 1.5), (0.5, 2.0), (2.0, 0.5)): # several starts; the surface is flat
         res = minimize(lambda x: neg_log_likelihood(x[0], x[1], frame, patience), x0,

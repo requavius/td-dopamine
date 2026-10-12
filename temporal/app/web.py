@@ -1,10 +1,13 @@
-# The playable task as a website: python web.py. The browser only draws screens and times
-# them; every rule is interface.App's, run here, one App per open page.
-# Run a single worker process: the live sessions are kept in memory.
-#
-# Nothing is kept from anyone but the researchers unless TEMPORAL_COLLECT=1, which waits on
-# approval for research with human participants. Until then other people can only play
-# as guests, whose records live in a temporary folder deleted when they leave.
+"""The task as a website: python -m temporal.app.web
+
+The browser only draws screens and times them; every rule is session.Session's, run
+here, one Session per open page. Run a single worker process: the live sessions are kept
+in memory.
+
+Nothing is kept from anyone but the researchers unless TEMPORAL_COLLECT=1, which waits on
+approval for research with human participants. Until then other people can only play
+as guests, whose records live in a temporary folder deleted when they leave.
+"""
 
 import argparse
 import io
@@ -25,10 +28,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from interface import DEFAULTS, MIN_FIT_ROWS, App, fit_summary
-from persistence import attempts_to_frame
+from ..model.persistence import attempts_to_frame
+from .session import DEFAULTS, MIN_FIT_ROWS, Session, fit_summary
+from .store import DATA_DIR as DESKTOP_DATA_DIR
 
-DATA_DIR = Path(os.environ.get("TEMPORAL_DATA", Path(__file__).parent / "data" / "web"))
+DATA_DIR = Path(os.environ.get("TEMPORAL_DATA", DESKTOP_DATA_DIR / "web"))
 COLLECT = os.environ.get("TEMPORAL_COLLECT", "0") == "1" # keep records of consenting players
 # Whose records are always kept, and who always sees dev stuff: the researchers themselves.
 RESEARCHERS = {e.strip().lower() for e in os.environ.get("TEMPORAL_RESEARCHERS", "").split(",")
@@ -36,7 +40,7 @@ RESEARCHERS = {e.strip().lower() for e in os.environ.get("TEMPORAL_RESEARCHERS",
 PANEL = os.environ.get("TEMPORAL_PANEL", "0") == "1" # dev stuff for every player
 CONSENT_VERSION = 1 # bump when the consent text in web/index.html changes
 IDLE_SECONDS = 2 * 3600 # a page silent this long is taken as closed
-PAGE = Path(__file__).parent / "web" / "index.html"
+PAGE = Path(__file__).parent / "static" / "index.html"
 TOKEN = re.compile(r"[0-9a-f]{32}")
 EMAIL = re.compile(r"[a-z0-9_%+-][a-z0-9._%+-]*@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}")
 
@@ -68,7 +72,7 @@ class Var:
         self.value = value
 
 
-# Stands in for Tk's root: timers run on a thread, holding the player's lock.
+# The session's scheduler: timers run on a thread, holding the player's lock.
 class Root:
     def __init__(self, lock):
         self.lock = lock
@@ -85,16 +89,13 @@ class Root:
     def after_cancel(self, timer):
         timer.cancel()
 
-    # Window calls with nothing to do in a browser.
-    def title(self, *_):
-        pass
-
-    geometry = minsize = destroy = title
+    def destroy(self):
+        pass  # nothing to close: the page shows the "closed" screen
 
 
-# interface.App with the screens sent to a browser. Opening the page is launching the app,
+# A Session with the screens sent to a browser. Opening the page is launching the app,
 # and closing or leaving it is closing the window: the same records, the same sessions.
-class WebApp(App):
+class WebApp(Session):
     def __init__(self, root, data_dir, panel=False, ephemeral=False):
         self.panel = panel
         self.ephemeral = ephemeral # a guest's record, deleted when they leave
@@ -109,7 +110,7 @@ class WebApp(App):
 
     make_var = staticmethod(Var)
 
-    def _build(self):
+    def build(self):
         pass
 
     def clear(self):
