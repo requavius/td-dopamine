@@ -24,6 +24,11 @@ class UserParams:
     a: float = 0.05  # learning rate
     patience: float = PATIENCE  # seconds per unit of model time; small gives up fast
     t0: float = 0.0  # non-decision time added to every RT
+    # Confidence (model/confidence.py): how much outcomes move what they believe their
+    # chance is. 0 is none, the default, and leaves every quantity exactly as without it.
+    eta: float = 0.0
+    conf_rule: str = "elo"
+    conf_ref: float = 0.75  # the count rule's reference rate
 
 
 @dataclass
@@ -56,6 +61,8 @@ class ModelState:
     slot_delta: float = 0.0
     last_set_delta: float = 0.0
 
+    confidence: float = 0.0    # logit offset on their believed chance (model/confidence.py)
+    questions_seen: int = 0    # questions worked on so far, to place each record in sequence
     challenge: float = 0.0     # running total of (1 - p) over every question attempted
     total_reward: float = 0.0  # running total of (1 - p) over right answers
     # Items answered wrong and not yet put right. A list, not a set: the same item can

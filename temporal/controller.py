@@ -16,9 +16,11 @@ import numpy as np
 import pandas as pd
 
 from .inference import fit, passages_to_frame
-from .model.accumulator import DT, snap_value, solution
+from .model import confidence as conf
+from .model.accumulator import DT, T_DUR, snap_cost, snap_value, solution
+from .model.conditions import MAX_REPEAT_ATTEMPTS, REPEAT_COST_SCALE
 from .model.params import PATIENCE, UserParams
-from .model.persistence import attempts_to_frame, fit_patience
+from .model.persistence import attempts_to_frame, fit_patience, neg_log_likelihood
 from .model.questions import Ratings, synthetic_type_diffs
 from .model.simulation import Simulation
 
@@ -71,6 +73,8 @@ class Estimate:
     note: str = ""
     patience: float = PATIENCE  # seconds per unit of model time while on a question
     t0: float = 0.0             # non-decision time; it shifts RTs, so planning ignores it
+    # Confidence: [(hypothesis, posterior weight, c now)], or None when not estimated.
+    confidence: list = None
 
 
 def decided_rows(state):
@@ -117,10 +121,73 @@ def estimate_patience(state, f, k):
     return patience, f"patience fit {raw:.1f}s from {gave_up} give-ups in {len(attempts)} questions"
 
 
-# The person as the environment knows them: measured ability and type ratings.
+# log P(choice, RT) of one decision record under (f, k), with its cost replaced.
+def _decision_ll(f, k, t0, value, cost, go, rt):
+    sol = solution(f, k, snap_value(value), snap_cost(cost), t0)
+    if go is None or rt is None or rt > T_DUR:
+        return math.log(max(sol.prob_undecided(), 1e-12))
+    pdf = sol.pdf("upper" if go == 1 else "lower")
+    i = min(int(rt / sol.dt), len(pdf) - 1)
+    return math.log(max(pdf[i] * sol.dt, 1e-12))
+
+
+# Posterior over confidence hypotheses, with f, k, t0 as estimated. Confidence moves
+# nothing a start decision sees, so only what it does move is scored: give-up times
+# (chance as believed) and redo decisions (cost as believed). Each hypothesis rebuilds
+# both from the logged chances and outcomes, and gets its own best patience.
+def confidence_posterior(state, est, hypotheses=conf.HYPOTHESES):
+    attempts = [a for a in state.persistence if a.get("outcome") is not None]
+    seq = [(a["p"], a["outcome"]) for a in attempts]
+    redos = [r for r in state.first_passage if r.get("p") is not None]
+    logpost = []
+    nows = []
+    for h, prior in zip(hypotheses, conf.prior(hypotheses)):
+        before, now = conf.trajectory(seq, h)
+        shifted = [dict(a, p=conf.perceived(a["p"], c)) for a, c in zip(attempts, before)]
+        frame = attempts_to_frame(shifted)
+        ll = 0.0
+        if len(frame) and frame["skipped"].any():
+            patience = fit_patience(est.f, est.k, frame)
+            ll -= neg_log_likelihood(est.f, est.k, frame, patience)
+        for r in redos:
+            q = r["q_index"]
+            p_hat = conf.perceived(r["p"], before[q] if q < len(before) else now)
+            cost = REPEAT_COST_SCALE * min(1.0 / max(p_hat, 1e-3), MAX_REPEAT_ATTEMPTS)
+            ll += _decision_ll(est.f, est.k, est.t0, r["value"], cost, r["GO"], r["RT"])
+        logpost.append(math.log(prior) + ll)
+        nows.append(now)
+    lp = np.array(logpost) - max(logpost)
+    w = np.exp(lp) / np.exp(lp).sum()
+    return [(h, float(wi), float(c)) for h, wi, c in zip(hypotheses, w, nows)]
+
+
+# The posterior with each hypothesis's confidence brought up to the latest question.
+def current_confidence(state, posterior):
+    seq = [(a["p"], a["outcome"]) for a in state.persistence if a.get("outcome") is not None]
+    return [(h, w, conf.trajectory(seq, h)[1]) for h, w, _ in posterior]
+
+
+# Hypothesis draws for rollouts, one per seed: from the posterior, or "none" without one.
+def confidence_draws(est, n, rng):
+    if not est.confidence:
+        return [(conf.NONE, 0.0)] * n
+    weights = [w for _, w, _ in est.confidence]
+    picks = rng.choices(range(len(weights)), weights=weights, k=n)
+    return [(est.confidence[i][0], est.confidence[i][2]) for i in picks]
+
+
+def _with_confidence(params, state, draw):
+    (rule, eta, ref), c = draw
+    return (dataclasses.replace(params, eta=eta, conf_rule=rule, conf_ref=ref),
+            dataclasses.replace(state, confidence=c))
+
+
+# The person as the environment knows them: measured ability and type ratings. Their
+# confidence is not observable; a controller that models it estimates it.
 def measured(state, ratings):
     return dataclasses.replace(state, ability=ratings.ability,
-                               type_diffs=np.array(ratings.difficulty, dtype=float))
+                               type_diffs=np.array(ratings.difficulty, dtype=float),
+                               confidence=0.0)
 
 
 # A copy of the person as they are now, logs stripped, placed in `env`.
@@ -170,7 +237,8 @@ class Update:
 class Controller:
     def __init__(self, start=Environment(), candidates=CANDIDATES, horizon=80, reps=4,
                  confirm_top=4, confirm_horizon=300, confirm_reps=16,
-                 explore=0.15, min_spacing=25, refit_every=REFIT_EVERY, known=None, seed=0):
+                 explore=0.15, min_spacing=25, refit_every=REFIT_EVERY, known=None, seed=0,
+                 confidence=False):
         self.env = start
         self.candidates = tuple(candidates)
         self.horizon = horizon  # screening: start decisions per rollout, cheap
@@ -182,6 +250,7 @@ class Controller:
         self.min_spacing = min_spacing  # start decisions between plans
         self.refit_every = refit_every  # new decided rows before fitting again
         self.known = known      # (f, k[, patience]), for tests only
+        self.confidence = confidence  # estimate confidence dynamics and plan with them
         self.rng = random.Random(seed)  # its own generator; never the global one
         self.est = None
         self.rows_at_fit = None
@@ -213,6 +282,10 @@ class Controller:
         elif self.est is None or rows - self.rows_at_fit >= self.refit_every:
             self.est = estimate(state, self.est)
             self.rows_at_fit = rows
+            if self.confidence:
+                self.est.confidence = confidence_posterior(state, self.est)
+        if self.confidence and self.est.confidence:
+            self.est.confidence = current_confidence(state, self.est.confidence)
 
         est = self.est
         model = UserParams(f=snap_value(est.f), k=snap_value(est.k), g=params.g, a=params.a,
@@ -227,7 +300,9 @@ class Controller:
         else:
             # Screening: every candidate, short rollouts, shared seeds.
             seeds = [self.rng.randrange(2**31) for _ in range(self.reps)]
-            screen = {env: float(np.mean([rollout(state, model, env, self.horizon, s) for s in seeds]))
+            people = self._people(state, model, len(seeds))
+            screen = {env: float(np.mean([rollout(st, m, env, self.horizon, s)
+                                          for (m, st), s in zip(people, seeds)]))
                       for env in self.candidates}
             front = sorted(screen, key=screen.get, reverse=True)[:self.confirm_top]
 
@@ -235,7 +310,9 @@ class Controller:
             # fresh shared seeds -- short ones are too noisy to trust with a switch.
             finalists = list(dict.fromkeys([*front, previous]))
             seeds = [self.rng.randrange(2**31) for _ in range(self.confirm_reps)]
-            per = {env: np.array([rollout(state, model, env, self.confirm_horizon, s) for s in seeds])
+            people = self._people(state, model, len(seeds))
+            per = {env: np.array([rollout(st, m, env, self.confirm_horizon, s)
+                                  for (m, st), s in zip(people, seeds)])
                    for env in finalists}
             scores = {env: float(v.mean()) for env, v in per.items()}
             best = max(scores, key=scores.get)
@@ -257,6 +334,14 @@ class Controller:
         update = Update(len(state.initiation_passages), est, previous, chosen, reason, scores)
         self.log.append(update)
         return update
+
+    # (params, state) per rollout seed: the same person, with confidence drawn from the
+    # posterior when it is modelled. Without it, exactly (model, state) every time.
+    def _people(self, state, model, n):
+        if not self.confidence:
+            return [(model, state)] * n
+        return [_with_confidence(model, state, d)
+                for d in confidence_draws(self.est, n, self.rng)]
 
     def log_frame(self):
         return pd.DataFrame([{
@@ -357,6 +442,10 @@ class InfoController(Controller):
         elif self.est is None or rows - self.rows_at_fit >= self.refit_every:
             self.est = estimate(state, self.est)
             self.rows_at_fit = rows
+            if self.confidence:
+                self.est.confidence = confidence_posterior(state, self.est)
+        if self.confidence and self.est.confidence:
+            self.est.confidence = current_confidence(state, self.est.confidence)
         est = self.est
         data = state.initiation_passages + state.first_passage
         if self.known is not None:
@@ -365,14 +454,21 @@ class InfoController(Controller):
             used = rows >= MIN_ROWS and est.raw is not None
             draws = self._draws(est, fisher(data, est.f, est.k) if used else None)
         bases = [np.eye(2) / PRIOR_SD ** 2 + fisher(data, f, k) for f, k in draws]
+        # One confidence hypothesis per (f, k) draw, held across settings so they compare
+        # on the same people.
+        cdraws = (confidence_draws(est, DRAWS, self.rng) if self.confidence
+                  else [None] * DRAWS)
 
         scores, sets = {}, {}
         for env in self.candidates:
             gains, started = [], []
-            for (f, k), base in zip(draws, bases):
+            for (f, k), base, cd in zip(draws, bases, cdraws):
                 model = UserParams(f=snap_value(f), k=snap_value(k), g=params.g, a=params.a,
                                    patience=est.patience)
-                sim = fork(state, model, env)
+                st = state
+                if cd is not None:
+                    model, st = _with_confidence(model, state, cd)
+                sim = fork(st, model, env)
                 seed = self.rng.randrange(2**31)
                 random.seed(seed)
                 np.random.seed(seed)

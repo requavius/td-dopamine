@@ -5,6 +5,7 @@ import numpy as np
 
 from .accumulator import initiation_decision, stage_decision
 from .competence import draw_outcome, settle_skipped, sigmoid, success_prob, update_ability
+from .confidence import perceived, update as update_confidence
 from .conditions import cost_components, stage_conditions, value_at_choice_point
 from .params import ModelState, UserParams
 from .persistence import conditions, draw_quit_time, draw_solve_seconds, quit_drift
@@ -79,7 +80,10 @@ class Simulation:
     # Work on a question until they answer or give up. True if they gave up.
     def _gives_up(self, item, p_true, review):
         state, params = self.state, self.params
-        value, cost = conditions(p_true, state.stage_amt, state.slot_delta)
+        # They weigh the question by the chance they believe they have; solving it takes
+        # the time the true chance says.
+        value, cost = conditions(perceived(p_true, state.confidence), state.stage_amt,
+                                 state.slot_delta)
         solve = draw_solve_seconds(p_true)
         # A race in seconds: time needed to solve against time taken to give up.
         quit_at = (draw_quit_time(quit_drift(params.f, params.k, float(value), float(cost)))
@@ -91,10 +95,17 @@ class Simulation:
         state.persistence.append({
             "p": known, "rt": min(quit_at, solve), "skipped": gave_up,
             "stage_amt": state.stage_amt, "item": item, "review": review,
-            "delta": state.slot_delta,
+            "delta": state.slot_delta, "q_index": state.questions_seen,
             "episode_id": state.episodes + state.abandoned + 1,
         })
         return gave_up
+
+    # Move confidence by how the question went (a give-up is a 0), and count it.
+    def _after_question(self, p_hat, outcome):
+        state, p = self.state, self.params
+        state.confidence = update_confidence(state.confidence, outcome, p_hat, p.eta,
+                                             p.conf_rule, p.conf_ref)
+        state.questions_seen += 1
 
     # The item for a fresh slot: slot `s` itself, or a question type near target_p.
     def _new_item(self, s):
@@ -116,6 +127,10 @@ class Simulation:
         choice["item"] = item
         choice["episode_id"] = state.episodes + state.abandoned + 1
         choice["timestep"] = state.t
+        choice["q_index"] = state.questions_seen
+        # The chance as the environment knew it, so a fit can rebuild the cost.
+        choice["p"] = (self.ratings.p(item) if self.ratings is not None
+                       and state.type_diffs is not None else success_prob(state, item))
         state.first_passage.append(choice)
         return choice["resolved"] == 1
 
@@ -141,8 +156,11 @@ class Simulation:
             review_slots += review
 
             p_item = success_prob(state, item)
+            p_hat = perceived(p_item, state.confidence)
             missed_new = False # a fresh question answered wrong, with the miss shown
             if self.skips and self._gives_up(item, p_item, review):
+                state.persistence[-1]["outcome"] = 0
+                self._after_question(p_hat, 0)
                 if s == 0 and cold:
                     # Came back, looked at the first question and gave up: that is
                     # leaving. The set is abandoned and the next start decision is cold.
@@ -158,6 +176,9 @@ class Simulation:
                     state.skipped.append(item) # one given up on again stays where it was
             else:
                 success = draw_outcome(state, item)
+                if self.skips:
+                    state.persistence[-1]["outcome"] = int(success)
+                self._after_question(p_hat, int(success))
                 # Only a question's first showing rates its type.
                 if self.ratings is not None and state.type_diffs is not None and not review:
                     self.ratings.update(item, success)
@@ -235,6 +256,7 @@ class Simulation:
         record["feedback"] = state.last_feedback
         record["missed_count"] = len(state.missed)
         record["timestep"] = state.t
+        record["q_index"] = state.questions_seen
         state.initiation_passages.append(record)
 
         if record["GO"] != 1:
