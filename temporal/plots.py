@@ -103,3 +103,101 @@ def plot_identifiability(out_path=ASSETS / "identifiability.png", eps=IDENT_EPS)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"saved {out_path}")
+
+
+# The same argument in 3D, with drift as height. A decision is a tilted plane (a roof)
+# mu = V*f - C*k through the origin. Measuring its drift floods the space to that height;
+# the shoreline is every (f, k) that fits. Standing the shoreline up gives a wall, and
+# two walls with different slopes meet in one vertical line: one (f, k) at every height.
+IDENT_Z = (-1.0, 0.6)
+
+
+def _shoreline(v, c, mu, n=200):
+    f = np.linspace(0, 2, n)
+    k = (f * v - mu) / c
+    keep = (k >= 0) & (k <= 2)
+    return f[keep], k[keep]
+
+
+def _wall(ax, f, k, color, zlim=IDENT_Z, alpha=0.22):
+    Z = np.vstack([np.full_like(f, zlim[0]), np.full_like(f, zlim[1])])
+    ax.plot_surface(np.vstack([f, f]), np.vstack([k, k]), Z, color=color, alpha=alpha,
+                    linewidth=0, shade=False)
+
+
+def _box(ax, title, zlim=IDENT_Z):
+    ax.set_xlim(0, 2)
+    ax.set_ylim(0, 2)
+    ax.set_zlim(*zlim)
+    ax.set_xlabel("f (reward sensitivity)", labelpad=4)
+    ax.set_ylabel("k (effort aversion)", labelpad=4)
+    ax.set_zlabel("drift  μ", labelpad=2)
+    ax.set_title(title, fontsize=11, pad=0)
+    ax.view_init(elev=22, azim=-125)
+    ax.tick_params(labelsize=7)
+
+
+def plot_identifiability_3d(out_path=ASSETS / "identifiability_3d.png"):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    f_true, k_true = IDENT_TRUE
+    zlo, zhi = IDENT_Z
+    g = np.linspace(0, 2, 30)
+    F, K = np.meshgrid(g, g)
+    (v1, c1), (v2, c2), (v3, c3) = (0.25, 0.30), (0.25, 0.75), (0.50, 0.60)
+    mu1, mu2, mu3 = (f_true * v - k_true * c for v, c in ((v1, c1), (v2, c2), (v3, c3)))
+    blue, orange = IDENT_COLORS
+
+    fig = plt.figure(figsize=(12, 10.5))
+
+    # (a) the roof: what drift every possible person would produce on this decision
+    ax = fig.add_subplot(2, 2, 1, projection="3d")
+    ax.plot_surface(F, K, F * v1 - K * c1, cmap="Blues", alpha=0.75, linewidth=0)
+    ax.plot([f_true], [k_true], [mu1], "o", color="black", markersize=5)
+    ax.text(f_true, k_true, mu1 + 0.12, "true person", fontsize=8)
+    _box(ax, f"(a) One decision is a tilted plane\nμ = {v1}·f − {c1}·k")
+
+    # (b) flood to the measured drift; the shoreline is everyone who fits
+    ax = fig.add_subplot(2, 2, 2, projection="3d")
+    ax.plot_surface(F, K, F * v1 - K * c1, cmap="Blues", alpha=0.45, linewidth=0)
+    ax.plot_surface(F, K, np.full_like(F, mu1), color="#7fb7d9", alpha=0.25, linewidth=0,
+                    shade=False)
+    f, k = _shoreline(v1, c1, mu1)
+    ax.plot(f, k, np.full_like(f, mu1), color=blue, linewidth=3, label="shoreline")
+    ax.plot(f, k, np.full_like(f, zlo), color=blue, linewidth=1.5, linestyle="--",
+            label="its shadow on the floor")
+    ax.plot([f_true], [k_true], [mu1], "o", color="black", markersize=5)
+    ax.legend(loc="upper left", fontsize=8)
+    _box(ax, f"(b) Measured drift = {mu1:.2f}: flood to that height.\n"
+             "Every (f, k) on the shoreline fits")
+
+    # (c) two decisions with different mixes: their walls meet in one vertical line
+    ax = fig.add_subplot(2, 2, 3, projection="3d")
+    for v, c, mu, col, name in ((v1, c1, mu1, blue, "decision 1"),
+                                (v2, c2, mu2, orange, "decision 2")):
+        f, k = _shoreline(v, c, mu)
+        _wall(ax, f, k, col)
+        ax.plot(f, k, np.full_like(f, mu), color=col, linewidth=2.5,
+                label=f"{name}: V/C = {v / c:.2f}")
+        ax.plot(f, k, np.full_like(f, zlo), color=col, linewidth=1.2, linestyle="--")
+    ax.plot([f_true] * 2, [k_true] * 2, [zlo, zhi], color="black", linewidth=2.5,
+            label="walls meet: f = 0.8, k = 0.8\nat every height")
+    ax.legend(loc="upper left", fontsize=8)
+    _box(ax, "(c) Two decisions, different mixes:\nthe walls cross in one vertical line")
+
+    # (d) same mix: the second wall is the first one again
+    ax = fig.add_subplot(2, 2, 4, projection="3d")
+    for v, c, mu, col, lw, name in ((v1, c1, mu1, blue, 4.5, "decision 1"),
+                                    (v3, c3, mu3, orange, 1.8, "decision 2")):
+        f, k = _shoreline(v, c, mu)
+        _wall(ax, f, k, col, alpha=0.18)
+        ax.plot(f, k, np.full_like(f, zlo), color=col, linewidth=lw,
+                label=f"{name}: V/C = {v / c:.2f}")
+    ax.plot([f_true], [k_true], [zlo], "o", color="black", markersize=5)
+    ax.legend(loc="upper left", fontsize=8)
+    _box(ax, "(d) Two decisions, same mix:\none wall, so no single crossing")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"saved {out_path}")
