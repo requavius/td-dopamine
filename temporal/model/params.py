@@ -1,4 +1,5 @@
 """The person (`UserParams`) and everything the environment knows about them (`ModelState`)."""
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -40,6 +41,7 @@ class UserParams:
 class ModelState:
     t: int
     ability: float = ABILITY_START  # competence, on the logit scale
+    ability_ceiling: float = math.inf  # where corrections stop paying (competence.correction_gain)
     stage_amt: int = 4              # questions (slots) per set
     diff: float = 0.1               # difficulty of every slot on the single-diff task
     stage_diffs: np.ndarray = None  # per-slot difficulty; None means every slot uses `diff`

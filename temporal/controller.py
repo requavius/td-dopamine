@@ -19,6 +19,7 @@ from .inference import fit, passages_to_frame
 from .model import confidence as conf
 from .model import feedback as fb
 from .model.accumulator import DT, T_DUR, snap_cost, snap_value, solution
+from .model.competence import ability_ceiling
 from .model.conditions import MAX_REPEAT_ATTEMPTS, REPEAT_COST_SCALE
 from .model.params import PATIENCE, UserParams
 from .model.persistence import attempts_to_frame, fit_patience, neg_log_likelihood
@@ -187,11 +188,13 @@ def _with_confidence(params, state, draw):
 
 
 # The person as the environment knows them: measured ability and type ratings. Their
-# confidence is not observable; a controller that models it estimates it.
+# confidence is not observable; a controller that models it estimates it. Nor is their
+# ceiling: rollouts place it on the rated bank, as `run` does on the true one.
 def measured(state, ratings):
     return dataclasses.replace(state, ability=ratings.ability,
                                type_diffs=np.array(ratings.difficulty, dtype=float),
-                               confidence=0.0)
+                               confidence=0.0,
+                               ability_ceiling=ability_ceiling(ratings.difficulty))
 
 
 # A copy of the person as they are now, logs stripped, placed in `env`. The person in a
@@ -512,7 +515,7 @@ def plan_in_worker(controller, state, params):
 # only ever sees the Elo rating built from their answers, never their true difficulty.
 def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
         reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True, leaves=True,
-        guard=None):
+        guard=None, ceiling=True):
     random.seed(seed)
     np.random.seed(seed)
     start = controller.env if controller else env
@@ -527,6 +530,9 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
     truth = type_diffs if type_diffs is not None else synthetic_type_diffs(spread)
     st.type_diffs = np.array(truth, dtype=float) # hidden from the controller
     st.ability = ability
+    # Without a ceiling (ceiling=False), ability outgrows the bank within a few hundred
+    # decisions, and every chance served goes to 1 whatever the target.
+    st.ability_ceiling = ability_ceiling(truth) if ceiling else math.inf
 
     sim.run_episode()  # already in the task, as Simulation.run does
     st.in_session = True
