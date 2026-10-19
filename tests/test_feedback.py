@@ -12,9 +12,10 @@ import pytest
 from temporal.app.web import Root, WebApp
 from temporal.controller import Environment, run
 from temporal.model import feedback as fb
-from temporal.model.params import ModelState, UserParams
+from temporal.model.params import THETA_START, ModelState, UserParams
 from temporal.model.persistence import attempts_to_frame, neg_log_likelihood
-from temporal.model.value import ACHIEVEMENT_SCALE, slot_reward
+from temporal.model.simulation import Simulation
+from temporal.model.value import ACHIEVEMENT_SCALE, V, slot_reward
 
 
 def test_true_and_false_are_on_and_off():
@@ -36,60 +37,76 @@ def test_a_set_totals_the_same_shown_or_hidden(seed):
         for s, ((right, p), hidden) in enumerate(zip(outcomes, hide)):
             worth = (1 - p) if right else 0.0
             achievement += worth
-            reward, credited = slot_reward(st, worth, not hidden, rng.random() * (1 - p),
-                                           achievement, credited, s == st.stage_amt - 1)
+            reward, credited = slot_reward(st, worth, not hidden, achievement, credited,
+                                           s == st.stage_amt - 1)
             paid += reward
         totals.append(paid)
     assert totals == pytest.approx([ACHIEVEMENT_SCALE * achievement / st.stage_amt] * 3)
 
 
-# The offset a person settles at, averaged over the second half of `n` questions: one
-# reveal moves it by up to HIDDEN_RATE, so a single moment of it is noisy.
-def _taught(hide_right, hide_wrong, n=4000, seed=0):
-    rng = random.Random(seed)
-    offset, late = 0.0, []
-    for i in range(n):
-        p = rng.uniform(0.2, 0.8)
-        right = rng.random() < p
-        if rng.random() < (hide_right if right else hide_wrong):
-            offset = fb.learn(offset, int(right), fb.believed(p, offset))
-        if i >= n // 2:
-            late.append(offset)
-    return float(np.mean(late))
+# Nothing pending, nothing changed: V is position alone and the hidden weights never move.
+def test_with_nothing_hidden_the_hidden_weights_never_move():
+    random.seed(0)
+    np.random.seed(0)
+    sim = Simulation(UserParams(f=0.8, k=0.8), feedback="on")
+    sim.run(max_decisions=40)
+    assert sim.state.theta[2:].tolist() == list(THETA_START[2:])
 
 
-# Hide only misses and a hidden outcome comes to read as a miss; hide rights as often and
-# it says nothing.
-def test_hiding_only_misses_is_learned_and_cover_keeps_it_uninformative():
-    assert fb.believed(0.6, _taught(0.0, 0.5)) < 0.1
-    assert abs(_taught(0.5, 0.5)) < 0.15
+# What one pending outcome at a 50% chance is worth after `n` start decisions, for a
+# person on question types (chances vary, so value sees pending outcomes across them).
+# `misses` hides every miss before the last slot and shows every right; otherwise
+# everything is hidden.
+def _pending_worth(misses, n=200, seeds=4):
+    out = []
+    for seed in range(seeds):
+        st = run(UserParams(f=0.8, k=0.8), env=Environment(0.5, 0.25, "guard" if misses else "off"),
+                 n_decisions=n, seed=seed).state
+        out.append(V(st, 1, [0.5]) - V(st, 1, []))
+    return float(np.mean(out))
+
+
+# Hide only misses and pending comes to be worth nothing; hide everything and it is worth
+# about an outcome at its chance. Learned by TD, at the value's own rate.
+def test_hiding_only_misses_is_learned_and_hiding_everything_is_not(monkeypatch):
+    real = fb.shows
+
+    def every_miss(state, params, pol, s, success, p, target_p, guard):
+        if pol == "guard":
+            return success or s == state.stage_amt - 1
+        return real(state, params, pol, s, success, p, target_p, guard)
+
+    monkeypatch.setattr(fb, "shows", every_miss)
+    # From a start of 0.25 (worth its chance, params.THETA_START), at the value's own rate.
+    assert _pending_worth(misses=True) < 0.1
+    assert _pending_worth(misses=False) > 0.2
 
 
 def _fragile():
-    # A person who values the task and has just taken a big error: one more seen miss
-    # would make leaving likely.
+    # A person who values the task: one more seen miss would make leaving likely.
     st = ModelState(t=1, stage_amt=4)
-    st.theta = np.array([0.6, 0.0])
+    st.theta = np.array([0.6, 0.0, 0.0, 0.0])
     return st
 
 
+# The guard hides a miss only while hiding is worth something: with pending worth nothing
+# (its weights at 0, as hiding only misses teaches), showing and hiding come out equal.
 def test_the_guard_stops_hiding_once_hiding_reads_as_a_miss():
     st, params = _fragile(), UserParams(f=1.2, k=0.8)
     guard = (1.2, 0.8, 3.0)
-    p = 0.3
-    assert fb.guard_hides(st, params, 0, fb.believed(p, 0.0) * (1 - p), p, guard)
-    st.hidden_offset = -fb.OFFSET_CLIP
-    assert not fb.guard_hides(st, params, 0, fb.believed(p, st.hidden_offset) * (1 - p), p, guard)
+    assert not fb.guard_hides(st, params, 0, 0.3, 0.3, guard)
+    st.theta = np.array([0.6, 0.0, 0.0, 1.0])  # pending worth an outcome at its chance
+    assert fb.guard_hides(st, params, 0, 0.3, 0.3, guard)
 
 
 def test_cover_hides_rights_at_the_rate_misses_were_hidden():
     st, params = _fragile(), UserParams(f=1.2, k=0.8)
     st.miss_hide_rate = 0.25
-    shown = [fb.shows(st, params, "guard+cover", 0, True, 0.0, 0.3, (1.2, 0.8, 3.0))
+    shown = [fb.shows(st, params, "guard+cover", 0, True, 0.5, 0.3, (1.2, 0.8, 3.0))
              for _ in range(400)]
     assert shown.count(False) == 100
-    assert fb.shows(st, params, "guard", 0, True, 0.0, 0.3, (1.2, 0.8, 3.0))
-    assert not fb.shows(st, params, "off", st.stage_amt - 1, True, 0.0, 0.3, (1.2, 0.8, 3.0))
+    assert fb.shows(st, params, "guard", 0, True, 0.5, 0.3, (1.2, 0.8, 3.0))
+    assert not fb.shows(st, params, "off", st.stage_amt - 1, True, 0.5, 0.3, (1.2, 0.8, 3.0))
 
 
 # Leaving abandons the set partway, and the next start decision is cold.

@@ -12,7 +12,12 @@ COST_PROFILES = {"low": REENTRY_COST_LOW, "mid": REENTRY_COST_MID, "high": REENT
 
 ABILITY_START = 0.5  # = DIFFICULTY_SCALE * default diff, so P(success) starts at 0.5
 PATIENCE = 10.0      # default seconds per unit of model time while working on a question
-N_FEATURES = 2       # value.phi: intercept and slot position
+N_FEATURES = 4       # value.phi: intercept, slot position, and two for hidden outcomes pending
+# Starting value weights. All 0 but the last: an outcome kept back starts out worth its
+# chance, p(1 - p), until scores teach otherwise. At 0 it would start out worth nothing,
+# and the feedback guard, comparing under that value, could never find hiding worth
+# anything and so never hide: nothing would ever teach it.
+THETA_START = (0.0, 0.0, 0.0, 1.0)
 
 
 @dataclass
@@ -62,9 +67,8 @@ class ModelState:
     last_set_delta: float = 0.0
 
     confidence: float = 0.0    # logit offset on their believed chance (model/confidence.py)
-    # What a hidden outcome tells them (model/feedback.py): a logit offset on their chance
-    # of having got it right, learned from the hidden outcomes the score has told them.
-    hidden_offset: float = 0.0
+    # Chances of the outcomes this set has kept back and not yet told (value.phi).
+    pending: list = field(default_factory=list)
     miss_hide_rate: float = 0.0  # guard+cover: the share of misses kept back lately
     cover_debt: float = 0.0      # guard+cover: rights owed a hiding, to keep pace with that share
     questions_seen: int = 0    # questions worked on so far, to place each record in sequence
@@ -91,6 +95,6 @@ class ModelState:
 
     def __post_init__(self):
         if self.theta is None:
-            self.theta = np.zeros(N_FEATURES)
+            self.theta = np.array(THETA_START)
         if not self.rpe:
             self.rpe = {r: 0 for r in range(self.stage_amt)}

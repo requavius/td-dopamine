@@ -53,9 +53,9 @@ SETTINGS = tuple(DEFAULTS)
 # 3: the reaction terms went; what a set does to the next start decision is carried by
 #    the prediction error in `value` instead, so rows recorded under 1-2 hold a `value`
 #    that predates the carry and are not comparable with later ones.
-# 4: a hidden outcome lands what they believe it earned, not nothing (feedback.py), so
-#    errors recorded with feedback off under 3 are not comparable with later ones; and
-#    leaving from a question is its own race, logged with `leave_v` and `leave_cost`.
+# 4: outcomes kept back are pending features of the value (value.phi), so errors recorded
+#    with feedback off under 3 are not comparable with later ones; and leaving from a
+#    question is its own race, logged with `leave_v` and `leave_cost`.
 RULES = 4
 
 
@@ -309,7 +309,7 @@ class Session:
             f"questions owed   {len(s.missed):6d}",
             f"skipped (total)  {s.skips:6d}",
             f"skipped, pending {len(s.skipped):6d}",
-            f"hidden offset    {s.hidden_offset:+6.2f}",
+            f"V(pending) /if right, /at chance {s.theta[2]:+.2f} {s.theta[3]:+.2f}",
             "",
             f"session          {self.session:6d}",
             f"sets done        {s.episodes:6d}",
@@ -328,7 +328,8 @@ class Session:
         s.rpe = {r: 0 for r in range(s.stage_amt)}
         s.in_session = True  # playing a set is being in the task
         self.policy_this_set = fb.policy(self.v_feedback.get())
-        self.hidden = []  # (outcome, believed) for each outcome kept for the score
+        self.hidden = []  # outcomes kept for the score
+        s.pending = []    # and their chances, which value sees (value.phi)
         self.shown_passed = 0  # right answers they have been shown
         self.reviewing = False
         self.source = None
@@ -454,10 +455,8 @@ class Session:
             self._failed_return()
         self.sync_measurement()
         # Shown now, or kept for the score. A redo is always shown: they asked for it.
-        believed = fb.believed(p, self.state.hidden_offset)
-        guess = believed * (1.0 - p)
         shown = redo or fb.shows(self.state, self.params, self.policy_this_set, self.s, correct,
-                                 guess, self.target_now, self.guard())
+                                 p, self.target_now, self.guard())
         worth = 1.0 - p if correct else 0.0
         if correct:
             self.passed += 1
@@ -465,13 +464,15 @@ class Session:
             self.achievement += worth
         else:
             self.wrong += 1
+        before = list(self.state.pending)
         if not shown:
-            self.hidden.append((int(correct), believed))
+            self.hidden.append(int(correct))
+            self.state.pending.append(p)
         rec = {"node": "answer", **self.question_record(), "given": raw, "correct": correct,
                "p": p, "rt": rt, "skipped": False, "slip": slip, "shown": shown}
         self.state.persistence.append(rec)
         self.store.append(rec)
-        self.land(worth, shown, guess)
+        self.land(worth, shown, before)
         self.persist()
         self.reviewing = False
         self.source = None
@@ -514,7 +515,7 @@ class Session:
         rec = {"node": "skip", **self.question_record(), "rt": rt, "skipped": True}
         self.state.persistence.append(rec)
         self.store.append(rec)
-        self.land(0.0, True, 0.0)  # the slot is spent and earned nothing, which is itself an error
+        self.land(0.0, True, list(self.state.pending))  # the slot is spent and earned nothing, which is itself an error
         self.persist()
         self.reviewing = False
         self.source = None
@@ -547,12 +548,13 @@ class Session:
     # The outcome just answered lands as reward and becomes a prediction error. Run per
     # outcome, not per slot, and before the redo prompt: they see how the question went,
     # that lands, and then they decide whether to take it again. A hidden outcome lands
-    # what they believe it earned, and the end-of-set score pays the rest.
-    def land(self, worth, shown, guess):
+    # nothing and joins what is pending (`before` is what was pending when it was shown);
+    # the end-of-set score pays what was earned.
+    def land(self, worth, shown, before):
         last = self.state.stage_amt - 1
-        reward, self.credited = slot_reward(self.state, worth, shown, guess, self.achievement,
+        reward, self.credited = slot_reward(self.state, worth, shown, self.achievement,
                                             self.credited, self.s == last)
-        delta = value_of_stage(self.state, self.params, self.s, reward)
+        delta = value_of_stage(self.state, self.params, self.s, reward, before=before)
         self.state.rpe[self.s] = delta
         self.state.slot_delta = delta
         self.episode_deltas.append(delta)
@@ -599,23 +601,21 @@ class Session:
         self.close_set(abandoned)
         self.ask_initiate()
 
-    # The set's bookkeeping, and its record. A finished set's score tells them every
-    # hidden outcome, which teaches them what a hidden outcome means; one walked out of
-    # tells them nothing.
+    # The set's bookkeeping, and its record. A finished set's score tells them every hidden
+    # outcome (the TD error at its last slot is what teaches them what hiding means); one
+    # walked out of tells them nothing.
     def close_set(self, abandoned, left=False):
         s = self.state
         n = s.stage_amt
-        told = [] if abandoned else self.hidden
-        for outcome, believed in told:
-            s.hidden_offset = fb.learn(s.hidden_offset, outcome, believed)
-        self.told = len(told)
+        self.told = 0 if abandoned else len(self.hidden)
+        s.pending = []
         s.total_reward += self.achievement
         s.last_review_load = self.review_showings / n
         s.last_episode_effort = 1.0 + s.last_review_load
         s.last_episode_passed = min(self.passed / n, 1.0)
         s.last_achievement = self.achievement / n
         s.last_feedback = int(not self.hidden)
-        unseen = sum(1 - o for o, _ in self.hidden)
+        unseen = self.hidden.count(0)
         s.last_seen_miss = min((self.wrong - unseen) / n, 1.0)
         s.last_unseen_miss = min(unseen / n, 1.0)
         # How the set went against what was predicted of it, carried into the decision
@@ -630,7 +630,7 @@ class Session:
                            "achievement": s.last_achievement, "review_load": s.last_review_load,
                            "skips": self.skips, "seen_miss": s.last_seen_miss,
                            "unseen_miss": s.last_unseen_miss, "feedback": s.last_feedback,
-                           "hidden": len(self.hidden), "hidden_offset": s.hidden_offset,
+                           "hidden": len(self.hidden), "theta": s.theta.tolist(),
                            "set_delta": s.last_set_delta})
         self.persist()
 

@@ -107,8 +107,8 @@ drags `V(s) + δ` down mostly produces leaving.
 - **The last question carries into this one.** `δ` is the prediction error from the
   slot just left: seeing that you missed the last one makes giving up on this one more
   likely, and seeing that you got a hard one right makes it less. With the outcome
-  hidden the error is only how far what they believe they earned was from what they
-  expected (see "Feedback, question by question").
+  hidden the error is what having one more outcome pending is worth to them, as their
+  value has learned it (see "Feedback, question by question").
 - **It is used for patience only.** `f` and `k` come from decisions; answer and skip
   times add nothing to them (see "Skips do not help estimate `f` and `k`" under
   Current results).
@@ -470,22 +470,27 @@ V(s) = θ · φ(s)                    φ(s) = [1, stage position]
 δ    = r + γ·V(s+1) − V(s)         θ ← θ + α·δ·φ(s)
 ```
 
+Since 2026-10-19 `φ` has two more features, for outcomes kept back and not yet told
+(`pending`, with chances `q`): `ACHIEVEMENT_SCALE / n · Σ (1 − q)` and
+`ACHIEVEMENT_SCALE / n · Σ q(1 − q)`. Both are 0 whenever everything is shown, so `V` is
+then exactly position alone and their weights never move.
+
 At a set's last slot, `V(s+1)` is `V(0)`, the start of the next set: the continuing
 bootstrap (see "Value bootstrap").
 
 **A slot's reward arrives when the person is shown it.** A shown outcome lands its worth
 at that slot: `(1 − p)` if they got it right, nothing if they did not. A hidden one
-lands what they believe it earned, their chance of having got it right given that it
-was hidden, times `(1 − p)`, and the end-of-set score pays the rest. A set totals the
-same either way: feedback moves *when* the signal arrives, and how wrong the guess
-was, not how much (`value.slot_reward`). That timing is the whole of feedback's effect on
-motivation, and it is what the three reaction terms used to stand in for.
+lands nothing; it moves them into a state with one more outcome pending, and the
+end-of-set score pays what was earned. A set totals the same either way: feedback moves
+*when* the signal arrives, not how much (`value.slot_reward`). That timing is the whole
+of feedback's effect on motivation, and it is what the three reaction terms used to
+stand in for.
 
-Until 2026-10-19 a hidden outcome landed nothing, so a set with feedback off paid one
-lump of `ACHIEVEMENT_SCALE · achievement / stage_amt` at the last slot. That cannot
-express a person reading the hiding itself: if a hidden outcome is worth nothing
-whatever they infer, learning that "hidden means wrong" changes nothing. See
-"Feedback, question by question" for the belief and how it is learned.
+What a hidden outcome feels worth meanwhile is the value of having it pending, learned
+by the same TD error at the same rate as the rest of `V`. Before 2026-10-19 the state had
+no such feature, so a hidden outcome was worth nothing whatever the person had learned,
+and learning that "hidden means wrong" could change nothing. See "Feedback, question by
+question".
 
 `φ` used to carry `difficulty` as a second feature. It was doing no work: `diff`
 never varies during learning, so `θ[1]` collapsed to exactly `θ[0]·d`, perfectly
@@ -1254,11 +1259,12 @@ expected. The correlation is a property of the task, not of the carry.
 - The prediction error is clipped at `±DELTA_CLIP` (1.0) so `value` stays on a bounded
   grid. It bound on about 0.5% of decisions with feedback hidden and never with it on,
   measured when a hidden outcome still landed nothing.
-- How fast a person learns what a hidden outcome means, `HIDDEN_RATE = 0.5`, is assumed,
-  not fitted, and is the same for everyone. The guard's margin (`GUARD_MARGIN`, one point
-  of leave chance) is a judgment call. A person who knows they got an arithmetic question
-  wrong without being told is not modelled: their belief about a hidden outcome uses
-  only their chance on it and what hiding has meant before.
+- What a hidden outcome means is learned at the value's own rate `a`, through two linear
+  features, so the learned meaning is linear in the question's chance and starts at
+  nothing (weights 0): a person's first hidden outcomes feel like misses until scores
+  teach otherwise. The guard's margin (`GUARD_MARGIN`, one point of leave chance) is a
+  judgment call. A person who knows they got an arithmetic question wrong without being
+  told is not modelled.
 - The guard plans the next question's leave chance from the simulated solve-time model
   (median `4 s / p^0.7`) even for a human, and from the controller's estimate of
   `f`, `k` and patience, or the prior (0.8, 0.8, 10 s) until there is one.
@@ -1320,10 +1326,13 @@ expected. The correlation is a property of the task, not of the carry.
    - **The reluctant, effort-averse person.** They play only 16 to 47 sets in 300 decisions,
      so the controller's advantage for them is undetermined. Candidates: a stronger prior,
      or no switching until the fit settles.
-   - **Establish the feedback sign flip.** Superseded on 2026-10-19 by per-question
-     feedback (see "Feedback, question by question"): hiding a whole set no longer
-     differs from showing it, and the one borderline gain is the guard at a 30% target
-     for an impatient person. Replicate that cell on fresh seeds before relying on it.
+   - **Establish the feedback sign flip.** Answered on 2026-10-19 with per-question
+     feedback learned by TD (see "Feedback, question by question"): no policy beats
+     showing every outcome for f 0.8, k 0.8, and hiding a whole set loses at low targets.
+     Untested: other people, and a controller that plans with the policies.
+   - **The simulated person outgrows the question bank** within a few hundred decisions.
+     A bank with harder types, or ability that also decays, would keep chances near the
+     target and keep late decisions informative.
    - **Exploration that hurts.** A random probe can land on the one setting that drives
      a person away. Probe near the current setting, or less often once estimates settle.
    - **The gap to the best fixed setting**, about 72 to 95% given true parameters. It is not
@@ -1523,27 +1532,38 @@ before the set's last (`model/feedback.py`):
 | `guard` | shown | kept back when showing it would raise the chance they leave on the next question by `GUARD_MARGIN` (1 point) or more |
 | `guard+cover` | kept back at the rate misses have been, paced rather than drawn | as `guard` |
 
-**What a hidden outcome is worth is the person's belief, and the belief is learned.**
-A hidden question lands `believed · (1 − p)` at its slot, with
+**What a hidden outcome means is TD value, learned like the rest of it.** An outcome kept
+back is pending until the score, and what is pending is part of the state (`value.phi`).
+Hiding a question lands no reward at its slot, so its error is
 
 ```
-believed = sigmoid(logit(p) + offset)
-offset  += HIDDEN_RATE · (outcome − believed)     at the score, for each hidden question
+δ = γ · V(s + 1, pending + this one) − V(s, pending)
 ```
 
-The end-of-set score pays whatever the guesses got wrong. So:
+and the score at the set's last slot lands what the pending outcomes earned, against
+the value their features predicted. That error is what teaches the person what hiding
+means. There is no separate learner and no rate of its own. The one timing constraint
+is information: whatever learns it can only learn when the outcome comes out, so a set
+walked out of teaches nothing.
 
-- **Hide only misses and hiding stops working.** Every reveal is a 0, the offset falls
-  toward −3, and a hidden outcome lands about what a seen miss does. In a test with
-  half of misses hidden and no rights, `believed` falls below 0.1 at a 60% chance.
-- **Hide rights as often as misses and hiding says nothing.** The offset stays within
-  ±0.15 of 0 on average, and a hidden miss is credited at the chance they had until
-  the score. A single moment of it swings about ±0.5, since one reveal moves it by up
-  to `HIDDEN_RATE`.
-- **The guard sees its own decay.** It compares showing with hiding under the offset as
-  it stands, so once hiding reads as a miss the two come out equal and it stops hiding.
-  It needs no rule about how often it may hide; the person's learning sets that.
-- **A set walked out of tells nothing**, so a leave also stops the offset learning.
+- **It starts out worth its chance.** The weights start at `THETA_START`: a pending
+  outcome is worth `p(1 − p)` (0.25 at a 50% chance) until scores teach otherwise. With
+  every weight at 0, a pending outcome would start out worth nothing, the guard would
+  never find hiding worth anything, never hide, and so never learn: it would be dead
+  code. That prior is an assumption.
+- **Hide only misses and hiding stops working, slowly.** The scores after hiding come in
+  low, so pending is learned down toward nothing and hiding a miss comes to feel like
+  seeing it. Hiding every miss before the last slot (f 0.8, k 0.8, 50% target, 8 seeds),
+  a pending outcome at a 50% chance was worth 0.23 after 25 start decisions, 0.15 after
+  100 and 0.065 after 200. Hiding everything, it stayed near its chance: 0.28, 0.29, 0.24.
+  At the value's rate (`a = 0.05`) decoding takes about a hundred sets.
+- **The guard sees its own decay.** It compares showing with hiding under the value as
+  it stands, so once pending is worth nothing the two come out equal and it stops hiding.
+- **Until 2026-10-19 (the first version that day)** this was a separate belief,
+  `sigmoid(logit p + offset)`, with its own fixed rate of 0.5 per revealed outcome, which
+  decoded hiding within about ten reveals. TD does the same job with no extra constant,
+  which is the reason for the change, and the table below shows the earlier result did
+  not survive it.
 
 Leaving from a question (see "Leaving from a question") is what makes the guard's goal
 measurable: before it, nobody could leave mid-set, so a seen miss could cost a skip
@@ -1551,31 +1571,39 @@ but never the rest of a session.
 
 **Does it pay?** One person (f 0.8, k 0.8), fixed settings, review 0.25, 300 start
 decisions, 96 paired seeds, the guard planning with the true (f, k, patience). Total
-reward, and the paired difference against `on` (a win only beyond 2 SE):
+reward under `on`, and the paired difference against it (a win or loss only beyond 2 SE):
 
 | patience | target | `on` | `off` − `on` | `guard` − `on` | `guard+cover` − `on` | hidden by guard |
 |---|---|---|---|---|---|---|
-| 10 s | 90% | 29.2 | +1.46 ± 0.88 | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.0% |
-| 10 s | 30% | 86.8 | −0.25 ± 5.60 | +5.11 ± 4.51 | −0.66 ± 4.60 | 0.8% |
-| 10 s | 20% | 25.2 | +0.96 ± 3.65 | +4.78 ± 3.53 | +0.37 ± 3.26 | 6.6% |
-| 3 s | 90% | 20.2 | +0.81 ± 0.72 | +0.19 ± 0.58 | −0.01 ± 0.52 | 1.3% |
-| 3 s | 30% | 9.8 | −0.78 ± 0.95 | **+3.71 ± 1.82** | +0.71 ± 1.55 | 9.9% |
-| 3 s | 20% | 2.9 | −0.31 ± 0.39 | +0.75 ± 0.58 | +0.33 ± 0.40 | 8.8% |
+| 10 s | 90% | 29.2 | −1.14 ± 0.85 | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.0% |
+| 10 s | 30% | 86.8 | **−36.12 ± 5.37** | −1.21 ± 4.75 | −5.56 ± 4.73 | 4.8% |
+| 10 s | 20% | 25.2 | **−12.50 ± 3.02** | +1.23 ± 3.83 | **−9.09 ± 3.35** | 15.9% |
+| 3 s | 90% | 20.2 | −0.51 ± 0.68 | −0.38 ± 0.56 | +0.01 ± 0.56 | 3.5% |
+| 3 s | 30% | 9.8 | **−4.67 ± 1.49** | −2.48 ± 1.43 | −2.74 ± 1.93 | 11.4% |
+| 3 s | 20% | 2.9 | −0.58 ± 0.38 | −0.09 ± 0.41 | −0.19 ± 0.39 | 8.6% |
 
-- **Nothing beats `on` at a 90% target.** At patience 10 s the guard never fires.
-- **The guard is positive in every low-target cell and clears 2 SE in one**: patience
-  3 s, 30% target, +3.71 ± 1.82 (+2.04 SE), 38% more reward and 31% more sets. That is
-  one of 18 comparisons, barely over the line, so it is a lead, not a result.
-- **Cover never paid.** Keeping hiding uninformative costs the positive error of every
-  right it hides, and at these hide rates (1 to 10% of questions) the guard's own decay
-  already limits what the person learns. The intuition "hide some rights so hiding
-  keeps working" is real in the model but was not worth its price here.
-- **Hiding a whole set no longer differs from showing it**: every `off` cell is within
-  1.7 SE. With the old rule (a hidden outcome landed nothing) and leaving on, `off` at
-  30% fell from 65.1 to 46.0 reward on 8 seeds, so the earlier "sign flip" depended on
-  that rule.
+- **Nothing beats showing every outcome.** No policy wins in any cell. The guard is
+  undetermined everywhere, with point estimates on both sides of zero.
+- **The one earlier lead is gone.** Under the separate belief, the guard at patience
+  3 s and a 30% target was +3.71 ± 1.82 (+2.0 SE). Under TD, on the same seeds, it is
+  −2.48 ± 1.43. It depended on how fast people decode hiding, which TD sets at the
+  value's own rate instead of 0.5 per reveal.
+- **Hiding a whole set loses**, by 2.7 to 6.7 SE at low targets. A hidden slot pays
+  nothing and only moves them into a state whose worth they learned on average, so the
+  per-question surprise that keeps them going at a hard target is lost; at a 30%
+  target with patience 10 s that costs 42% of the reward.
+- **Cover loses at a 20% target** (−9.09 ± 3.35): hiding rights forfeits their positive
+  error, and at 24% of questions hidden it costs more than the misses it buries.
+- **With every weight starting at 0**, the guard hid nothing in any cell (identical to
+  `on`) and `off` lost by 2.7 to 4.6 SE in five of six cells, as the cold start predicts.
+- **The person outgrows the bank.** In `controller.run` the simulated person's ability
+  climbs past the hardest question type within 200 to 600 start decisions (to 8 to 12
+  logits, hardest type 2.2), after which every chance is about 1, nothing hidden
+  carries any signal and reward stops coming. This predates per-question feedback and
+  affects every 300-decision result here; the table compares policies on equal terms,
+  but most of its late decisions are in that saturated regime.
 - The people are simulated with the guard's own model; on a human, the 4 s / p^0.7
-  solve-time model, the 0.5 learning rate and the one-point margin are untested.
+  solve-time model, the starting prior and the one-point margin are untested.
 
 **Is leaving informative about f and k?** The same 12 people as "Skips do not help
 estimate `f` and `k`" (4 profiles × 3 seeds, 300 start decisions, random probes), at

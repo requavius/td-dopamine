@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..model.params import ModelState
+from ..model.params import N_FEATURES, THETA_START, ModelState
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
@@ -47,6 +47,8 @@ def state_from_dict(d):
     names = {f.name for f in dataclasses.fields(ModelState)} - set(LOGS)
     st = ModelState(**{k: v for k, v in d.items() if k in names})
     st.theta = np.array(st.theta, dtype=float)
+    if len(st.theta) < N_FEATURES:  # saved before value had features for hidden outcomes
+        st.theta = np.concatenate([st.theta, THETA_START[len(st.theta):]])
     for name in ("type_diffs", "stage_diffs"):
         if getattr(st, name) is not None:
             setattr(st, name, np.array(getattr(st, name), dtype=float))

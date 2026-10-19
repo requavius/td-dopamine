@@ -69,8 +69,8 @@ class Simulation:
                 0.0, None,
             )
 
-    def step_stage(self, s, reward=0.0):
-        delta = value_of_stage(self.state, self.params, s, reward)
+    def step_stage(self, s, reward=0.0, before=None):
+        delta = value_of_stage(self.state, self.params, s, reward, before=before)
         self.state.rpe[s] = delta
         return delta
 
@@ -165,6 +165,7 @@ class Simulation:
         state.in_session = False
         state.total_reward += achievement # the answers they did give still count
         state.last_set_delta = 0.0 # they walked out; there was no set to judge
+        state.pending = [] # never told
 
     # One episode: exactly `stage_amt` slots, one question each.
     def run_episode(self):
@@ -175,7 +176,8 @@ class Simulation:
         deltas = []
         passed = wrong = review_slots = 0
         achievement = credited = 0.0  # earned this set, and how much of it has landed
-        hidden = []                   # (outcome, believed) for each outcome kept for the score
+        hidden = []                   # outcomes kept for the score
+        state.pending = []            # and their chances, which value sees (value.phi)
         state.slot_delta = 0.0        # no slot precedes the first one
         carry = None  # a missed question the learner chose to redo, owed the next slot
 
@@ -191,8 +193,9 @@ class Simulation:
             p_item = success_prob(state, item)
             p_hat = perceived(p_item, state.confidence)
             missed_new = False # a fresh question answered wrong, with the miss shown
-            worth = guess = 0.0
+            worth = 0.0
             shown = True
+            before = list(state.pending)
             how = self._works(s, item, p_item, review) if self.skips else "answered"
             if how == "left":
                 self._leave(achievement)
@@ -228,18 +231,17 @@ class Simulation:
                 # accuracy reward -- the earlier model, kept for comparison -- pays 1 per
                 # right answer, so it is divided back out.
                 full = 1.0 - p_item if self.reward == "achievement" else 1.0 / ACHIEVEMENT_SCALE
-                believed = fb.believed(p_item, state.hidden_offset)
-                guess = believed * full
                 if success:
                     passed += 1
                     achievement += 1.0 - p_item # a hard question right is worth more
                     worth = full
                 else:
                     wrong += 1
-                shown = fb.shows(state, self.params, self.feedback, s, success, guess,
+                shown = fb.shows(state, self.params, self.feedback, s, success, p_item,
                                  self.target_p, self.guard)
                 if not shown:
-                    hidden.append((int(success), believed))
+                    hidden.append(int(success))
+                    state.pending.append(p_item)
                 # No redo prompt for a hidden miss: offering one would reveal it.
                 missed_new = not success and shown and not review and s < last
             if self.skips:
@@ -247,12 +249,13 @@ class Simulation:
 
             # A shown outcome lands as reward the moment they see it: a seen miss is a
             # slot that paid nothing against a value that expected something, which is the
-            # negative error. A hidden one lands what they believe it earned, and the
-            # end-of-set score pays the rest.
+            # negative error. A hidden one lands nothing; it moves them to a state with
+            # one more outcome pending, worth what they have learned pending is worth, and
+            # the end-of-set score pays what was earned.
             earned = (achievement if self.reward == "achievement"
                       else passed / ACHIEVEMENT_SCALE)
-            reward, credited = slot_reward(state, worth, shown, guess, earned, credited, s == last)
-            delta = self.step_stage(s, reward=reward)
+            reward, credited = slot_reward(state, worth, shown, earned, credited, s == last)
+            delta = self.step_stage(s, reward=reward, before=before)
             state.slot_delta = delta
             deltas.append(delta)
 
@@ -261,10 +264,7 @@ class Simulation:
             if missed_new and self.review_mode == "choice" and self._redoes(s, item):
                 carry = item
 
-        # The score tells them how every hidden question went, and that teaches them what
-        # a hidden outcome means.
-        for outcome, believed in hidden:
-            state.hidden_offset = fb.learn(state.hidden_offset, outcome, believed)
+        state.pending = []  # the score has told them
 
         # What the next start decision sees of the set just played.
         n = state.stage_amt
@@ -274,8 +274,8 @@ class Simulation:
         state.last_achievement = achievement / n
         state.total_reward += achievement
         state.last_feedback = int(not hidden)
-        state.last_seen_miss = (wrong - sum(1 - o for o, _ in hidden)) / n
-        state.last_unseen_miss = sum(1 - o for o, _ in hidden) / n
+        state.last_seen_miss = (wrong - hidden.count(0)) / n
+        state.last_unseen_miss = hidden.count(0) / n
         # How the set went against what was predicted of it, carried into the decision
         # to start another one.
         state.last_set_delta = float(sum(deltas))
