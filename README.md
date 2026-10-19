@@ -1320,9 +1320,10 @@ expected. The correlation is a property of the task, not of the carry.
    - **The reluctant, effort-averse person.** They play only 16 to 47 sets in 300 decisions,
      so the controller's advantage for them is undetermined. Candidates: a stronger prior,
      or no switching until the fit settles.
-   - **Establish the feedback sign flip.** Showing feedback wins at a 90% target by
-     +3.4 SE; hiding it at a 30% target is the right sign at −0.7 SE. More seeds at the
-     low targets would settle whether the controller should ever hide it.
+   - **Establish the feedback sign flip.** Superseded on 2026-10-19 by per-question
+     feedback (see "Feedback, question by question"): hiding a whole set no longer
+     differs from showing it, and the one borderline gain is the guard at a 30% target
+     for an impatient person. Replicate that cell on fresh seeds before relying on it.
    - **Exploration that hurts.** A random probe can land on the one setting that drives
      a person away. Probe near the current setting, or less often once estimates settle.
    - **The gap to the best fixed setting**, about 72 to 95% given true parameters. It is not
@@ -1509,4 +1510,101 @@ modelled kinds of confidence (plus one unmodelled rule); whether real people hav
 confidence dynamics at all is untested, and if they do not, the expected gain is about
 zero. The app does not log the outcome order and question index this fit replays, so it
 cannot yet be used on human data.
+
+## Feedback, question by question: since 2026-10-19
+
+Feedback used to be one switch per set. It is now a policy, applied to each question
+before the set's last (`model/feedback.py`):
+
+| policy | rights | misses |
+|---|---|---|
+| `on` | shown | shown |
+| `off` | kept for the score | kept for the score (the last one too) |
+| `guard` | shown | kept back when showing it would raise the chance they leave on the next question by `GUARD_MARGIN` (1 point) or more |
+| `guard+cover` | kept back at the rate misses have been, paced rather than drawn | as `guard` |
+
+**What a hidden outcome is worth is the person's belief, and the belief is learned.**
+A hidden question lands `believed · (1 − p)` at its slot, with
+
+```
+believed = sigmoid(logit(p) + offset)
+offset  += HIDDEN_RATE · (outcome − believed)     at the score, for each hidden question
+```
+
+The end-of-set score pays whatever the guesses got wrong. So:
+
+- **Hide only misses and hiding stops working.** Every reveal is a 0, the offset falls
+  toward −3, and a hidden outcome lands about what a seen miss does. In a test with
+  half of misses hidden and no rights, `believed` falls below 0.1 at a 60% chance.
+- **Hide rights as often as misses and hiding says nothing.** The offset stays within
+  ±0.15 of 0 on average, and a hidden miss is credited at the chance they had until
+  the score. A single moment of it swings about ±0.5, since one reveal moves it by up
+  to `HIDDEN_RATE`.
+- **The guard sees its own decay.** It compares showing with hiding under the offset as
+  it stands, so once hiding reads as a miss the two come out equal and it stops hiding.
+  It needs no rule about how often it may hide; the person's learning sets that.
+- **A set walked out of tells nothing**, so a leave also stops the offset learning.
+
+Leaving from a question (see "Leaving from a question") is what makes the guard's goal
+measurable: before it, nobody could leave mid-set, so a seen miss could cost a skip
+but never the rest of a session.
+
+**Does it pay?** One person (f 0.8, k 0.8), fixed settings, review 0.25, 300 start
+decisions, 96 paired seeds, the guard planning with the true (f, k, patience). Total
+reward, and the paired difference against `on` (a win only beyond 2 SE):
+
+| patience | target | `on` | `off` − `on` | `guard` − `on` | `guard+cover` − `on` | hidden by guard |
+|---|---|---|---|---|---|---|
+| 10 s | 90% | 29.2 | +1.46 ± 0.88 | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.0% |
+| 10 s | 30% | 86.8 | −0.25 ± 5.60 | +5.11 ± 4.51 | −0.66 ± 4.60 | 0.8% |
+| 10 s | 20% | 25.2 | +0.96 ± 3.65 | +4.78 ± 3.53 | +0.37 ± 3.26 | 6.6% |
+| 3 s | 90% | 20.2 | +0.81 ± 0.72 | +0.19 ± 0.58 | −0.01 ± 0.52 | 1.3% |
+| 3 s | 30% | 9.8 | −0.78 ± 0.95 | **+3.71 ± 1.82** | +0.71 ± 1.55 | 9.9% |
+| 3 s | 20% | 2.9 | −0.31 ± 0.39 | +0.75 ± 0.58 | +0.33 ± 0.40 | 8.8% |
+
+- **Nothing beats `on` at a 90% target.** At patience 10 s the guard never fires.
+- **The guard is positive in every low-target cell and clears 2 SE in one**: patience
+  3 s, 30% target, +3.71 ± 1.82 (+2.04 SE), 38% more reward and 31% more sets. That is
+  one of 18 comparisons, barely over the line, so it is a lead, not a result.
+- **Cover never paid.** Keeping hiding uninformative costs the positive error of every
+  right it hides, and at these hide rates (1 to 10% of questions) the guard's own decay
+  already limits what the person learns. The intuition "hide some rights so hiding
+  keeps working" is real in the model but was not worth its price here.
+- **Hiding a whole set no longer differs from showing it**: every `off` cell is within
+  1.7 SE. With the old rule (a hidden outcome landed nothing) and leaving on, `off` at
+  30% fell from 65.1 to 46.0 reward on 8 seeds, so the earlier "sign flip" depended on
+  that rule.
+- The people are simulated with the guard's own model; on a human, the 4 s / p^0.7
+  solve-time model, the 0.5 learning rate and the one-point margin are untested.
+
+**Is leaving informative about f and k?** The same 12 people as "Skips do not help
+estimate `f` and `k`" (4 profiles × 3 seeds, 300 start decisions, random probes), at
+patience 10 s and 3 s. Standard errors are from the observed information at the true
+(f, k) (Hessian of −log L for times, `controller.fisher` for decisions), median over
+people; RMSE is from fitting times alone:
+
+| | 10 s: SE f | SE k | 3 s: SE f | SE k |
+|---|---|---|---|---|
+| decisions | 0.048 | 0.082 | 0.155 | 0.059 |
+| times, leaves read as skips | 0.631 | 0.232 | 0.428 | 0.210 |
+| times, leave race | 0.361 | 0.193 | 0.310 | 0.211 |
+| decisions + times, leaves as skips | 0.047 | 0.068 | 0.144 | 0.054 |
+| decisions + times, leave race | 0.047 | 0.068 | 0.138 | 0.053 |
+
+| times-only fit | 10 s: f RMSE | k RMSE | 3 s: f RMSE | k RMSE |
+|---|---|---|---|---|
+| leave race | 0.369 | 0.362 | 0.379 | 0.422 |
+| leaves read as skips | 0.532 | 0.361 | 0.595 | 0.602 |
+
+- **Within time on questions, the leave race is real information about f.** It cuts the
+  standard error on `f` from times by 30 to 43%, and the times-only RMSE by 31 to 36%.
+  Its value, `V(s) + δ`, varies far more than a question's `p(1 − p)`, which is what `f`
+  needs.
+- **Added to the decisions, it changes almost nothing**: `f` SE 0.144 → 0.138 at 3 s,
+  none at 10 s. People leave 2 to 11 times in 300 to 800 questions; the start and redo
+  decisions carry the estimate. So the controller still fits `f` and `k` from decisions,
+  and times only set patience.
+- These standard errors assume the model is right. The last time persistence was
+  added to the fit on a real player it moved `f` from 3.0 to 0.0; a human's leave
+  times are the test that matters.
 
