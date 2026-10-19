@@ -195,6 +195,9 @@ person (400 decisions, 4 seeds, `T_DUR = 3.0`):
 | f 0.4, k 0.4 | 45% | 28 / 65 / **94** / 77 / 52 |
 | f 1.0, k 1.0 | 45% | 21 / 53 / **77** / 62 / 34 |
 
+This table, like the rest of this section, was measured before the ability ceiling (see
+"Ability ceiling"), on a person who outgrew the bank; it has not been re-run.
+
 That is why the target range reaches down to 20%: a person whose best setting is
 low should not be stuck at the edge of what the controller may choose.
 
@@ -344,6 +347,53 @@ beyond 2 SE:
   None did under measuring. That fits the reason the measuring controller exists: reward
   planning settles on a setting, so cost stops varying. This run did not log cost spread,
   so it does not test that reason directly.
+
+**Re-run with the ability ceiling (2026-10-19): measuring's reward advantage was the
+saturated person.** The table above was measured on the person who outgrew the question
+bank (see "Ability ceiling"). Fixed default against `InfoController`, the app's
+controller, on the same 4 × 4 grid with one seed per point (16 people, seed 0), 300 start
+decisions, otherwise as above. "Before" is the code before the ceiling, run from its own
+checkout; "after" is the same people and seeds with it. f and k are the controller's last
+estimate (the shrunk one it plans with), or for the fixed default the same estimator run
+once at the end, so the RMSEs are not on the same footing as the table above, whose
+measuring rows came from a separate script. The reward controller was not re-run: at
+about 13 minutes per person it is the slowest of the four.
+
+| how settings were chosen | f RMSE, before → after | k RMSE, before → after | total reward, before → after | ability at end, before → after | mean target chosen, before → after |
+|---|---|---|---|---|---|
+| fixed default | 0.111 → 0.196 | 0.210 → 0.508 | 61.5 → 115.9 | 3.82 → 0.72 | 75% → 75% |
+| for information (`InfoController`) | 0.068 → 0.196 | 0.093 → 0.111 | 154.8 → 111.7 | 1.43 → 0.38 | 34% → 37% |
+
+Paired over the 16 people (a difference counts only beyond 2 SE):
+
+- **Reward, measuring − fixed default: +93.4 ± 14.6 before, −4.2 ± 9.9 after.** The
+  win becomes undetermined. Both sides moved: the fixed default gained +54.4 ± 8.1,
+  because at a 75% target its person no longer reaches a chance near 1, where right
+  answers pay nothing; measuring lost −43.1 ± 15.5.
+- **Why measuring lost, probably.** It chooses low targets, 22% to 60% on average per
+  person. Before, ability ended at 0.06 to 4.62 logits (median 0.93) and kept growing
+  through the run, ahead of the ratings that pick questions, so a question rated at 25%
+  was easier than rated (at a fixed 30% target the chance served in the second half
+  was 0.71 to 1.00; see "Ability ceiling"). With the ceiling, ability ends at 0.00 to 0.75,
+  questions are about as hard as rated, and the people it measures start fewer sets
+  (P(start) 0.73 before, 0.61 after; the fixed default's went 0.63 to 0.72). The chance
+  actually served was not logged in this run, so this mechanism is inferred, not
+  measured. All 16 people share seed 0's bank, whose hardest type is 2.19, so their
+  ceiling is 0.80.
+- **Measuring still identifies k better**: k squared error, measuring − fixed default,
+  −0.0354 ± 0.0166 before (2.1 SE) and −0.2455 ± 0.1168 after (2.1 SE), both narrow wins.
+  The fixed default's k RMSE rose to 0.508 mostly through overestimates at high f (1.90
+  for a true 0.6 at f 1.5, 1.17 for a true 0.2 at f 1.0) and one fit that hit a bound and
+  fell back to the prior (f 1.5, k 0.2).
+- **f is undetermined after** (−0.0000 ± 0.0474). Measuring's f RMSE of 0.196 is one
+  person: at f 1.0, k 1.5 they all but stopped starting (P(start) 0.01, reward 1.0), the
+  fit ran to its bound and f stayed at 0.26. Median absolute f error is 0.056 for both
+  ways of choosing, against 0.036 for measuring before.
+- **What it changes.** "Measuring costs no detectable reward" survives, in this smaller
+  run, as no difference either way; "P2 passes" (reward, measuring − fixed default) does
+  not survive. A controller that lowers the target to measure k now pays for it in
+  engagement for some people, which the safety floor (half the best setting's sets in a
+  25-decision rollout) did not stop for the person who left.
 
 ---
 
@@ -501,7 +551,8 @@ Competence, in the simulator, is learned only from correcting what was missed:
 ```
 P(success) = sigmoid(ability − difficulty)       ← Rasch / IRT
 outcome    ~ Bernoulli(P(success))               ← per question
-ability   += CORRECTION_GAIN   only when a question answered wrong (or skipped)
+ability   += CORRECTION_GAIN · (1 − exp(−(ceiling − ability) / CEILING_WIDTH))
+                               only when a question answered wrong (or skipped)
                                earlier is shown again and answered right
 ```
 
@@ -509,6 +560,13 @@ A first-time correct answer teaches nothing, and neither does a failure; only a
 correction does (`competence.update_ability`, `competence.settle_skipped`). This is deliberate practice rather than
 error correction: working a question out between sessions, without being shown it
 again, teaches nothing here.
+
+Each correction is worth `CORRECTION_GAIN` (0.06) far below the person's ceiling and
+less the nearer they are to it, nothing at it. On the question-type task (`controller.run`)
+the ceiling is where the hardest type in their bank is still answered right only 20% of
+the time, so every target the controller can choose stays servable. On the single-`diff`
+task there is no ceiling (`inf`), and the rule is the old constant gain exactly. See
+"Ability ceiling" for why.
 
 **Measured versus simulated competence.** For a real person there is nothing to
 simulate: the app *measures* competence with the Elo ratings above, and the
@@ -1330,9 +1388,9 @@ expected. The correlation is a property of the task, not of the carry.
      feedback learned by TD (see "Feedback, question by question"): no policy beats
      showing every outcome for f 0.8, k 0.8, and hiding a whole set loses at low targets.
      Untested: other people, and a controller that plans with the policies.
-   - **The simulated person outgrows the question bank** within a few hundred decisions.
-     A bank with harder types, or ability that also decays, would keep chances near the
-     target and keep late decisions informative.
+   - **The simulated person outgrows the question bank.** Fixed on 2026-10-19 with a
+     ceiling on ability (see "Ability ceiling"). Untested: whether a human's gains
+     flatten where the bank puts the ceiling, and a ceiling that varies by person.
    - **Exploration that hurts.** A random probe can land on the one setting that drives
      a person away. Probe near the current setting, or less often once estimates settle.
    - **The gap to the best fixed setting**, about 72 to 95% given true parameters. It is not
@@ -1571,7 +1629,9 @@ but never the rest of a session.
 
 **Does it pay?** One person (f 0.8, k 0.8), fixed settings, review 0.25, 300 start
 decisions, 96 paired seeds, the guard planning with the true (f, k, patience). Total
-reward under `on`, and the paired difference against it (a win or loss only beyond 2 SE):
+reward under `on`, and the paired difference against it (a win or loss only beyond 2 SE).
+This first table is from before the ability ceiling (see "Ability ceiling"), when the
+person outgrew the bank; the re-run with it follows.
 
 | patience | target | `on` | `off` − `on` | `guard` − `on` | `guard+cover` − `on` | hidden by guard |
 |---|---|---|---|---|---|---|
@@ -1596,12 +1656,57 @@ reward under `on`, and the paired difference against it (a win or loss only beyo
   error, and at 24% of questions hidden it costs more than the misses it buries.
 - **With every weight starting at 0**, the guard hid nothing in any cell (identical to
   `on`) and `off` lost by 2.7 to 4.6 SE in five of six cells, as the cold start predicts.
-- **The person outgrows the bank.** In `controller.run` the simulated person's ability
-  climbs past the hardest question type within 200 to 600 start decisions (to 8 to 12
-  logits, hardest type 2.2), after which every chance is about 1, nothing hidden
-  carries any signal and reward stops coming. This predates per-question feedback and
-  affects every 300-decision result here; the table compares policies on equal terms,
-  but most of its late decisions are in that saturated regime.
+- **The person outgrew the bank.** In `controller.run` the simulated person's ability
+  climbed past the hardest question type within 200 to 600 start decisions (to 8 to 12
+  logits, hardest type 2.2), after which every chance was about 1, nothing hidden
+  carried any signal and reward stopped coming. Fixed by the ability ceiling; re-run
+  below.
+
+**Re-run with the ability ceiling (2026-10-19).** Same person, settings, seeds and
+policies. The harness reproduced the table above exactly with the ceiling switched off
+(`run(..., ceiling=False)`), so the differences below are the ceiling alone. "Hidden by
+guard" here counts hidden outcomes over answered questions, a slightly different base
+from the table above (it gives 4.9%, 16.8%, 3.7%, 13.0%, 10.1% for the old run).
+
+300 start decisions:
+
+| patience | target | `on` (before → after) | `off` − `on` | `guard` − `on` | `guard+cover` − `on` | hidden by guard | ability at end, `on` (before → after) |
+|---|---|---|---|---|---|---|---|
+| 10 s | 90% | 29.2 → 42.2 | **−3.37 ± 0.85** | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.0% | 1.81 → 1.35 |
+| 10 s | 30% | 86.8 → 91.4 | **−44.26 ± 5.82** | −0.60 ± 5.75 | −5.71 ± 6.13 | 5.3% | 4.40 → 1.50 |
+| 10 s | 20% | 25.2 → 21.9 | **−8.60 ± 2.25** | −0.83 ± 2.54 | **−9.83 ± 2.27** | 17.4% | 0.82 → 0.49 |
+| 3 s | 90% | 20.2 → 28.1 | −0.97 ± 0.99 | +0.35 ± 1.13 | −1.09 ± 1.08 | 3.5% | 1.28 → 0.98 |
+| 3 s | 30% | 9.8 → 8.8 | **−3.45 ± 1.25** | −1.05 ± 1.13 | −2.45 ± 1.52 | 13.2% | 0.41 → 0.26 |
+| 3 s | 20% | 2.9 → 2.6 | −0.49 ± 0.25 | +0.05 ± 0.28 | −0.05 ± 0.26 | 10.3% | 0.13 → 0.09 |
+
+1000 start decisions, where the old person spent most of the run saturated:
+
+| patience | target | `on` (before → after) | `off` − `on`, before → after | `guard` − `on`, before → after | `guard+cover` − `on`, before → after | ability at end, `on` (before → after) |
+|---|---|---|---|---|---|---|
+| 10 s | 90% | 49.4 → 104.5 | −2.74 ± 1.77 → **−9.42 ± 3.80** | 0.00 → 0.00 | 0.00 → 0.00 | 3.05 → 1.90 |
+| 10 s | 30% | 134.2 → 492.1 | −8.11 ± 4.29 → **−115.50 ± 15.99** | −3.47 ± 3.39 → −17.67 ± 13.99 | −3.76 ± 3.53 → **−28.69 ± 13.22** | 14.55 → 2.32 |
+| 10 s | 20% | 98.5 → 207.4 | −12.89 ± 7.07 → **−65.49 ± 16.25** | +3.68 ± 6.54 → +5.16 ± 14.79 | −6.22 ± 7.25 → **−36.66 ± 15.05** | 9.18 → 1.63 |
+| 3 s | 90% | 37.6 → 73.8 | −2.21 ± 1.41 → **−9.01 ± 3.07** | −0.54 ± 1.58 → −0.49 ± 2.89 | −1.71 ± 1.33 → −5.49 ± 3.14 | 2.28 → 1.58 |
+| 3 s | 30% | 61.5 → 92.7 | **−18.43 ± 5.85** → **−46.57 ± 10.11** | −7.14 ± 6.22 → **−25.44 ± 10.20** | **−17.79 ± 6.71** → **−40.38 ± 11.00** | 5.25 → 1.28 |
+| 3 s | 20% | 12.0 → 9.4 | −0.88 ± 3.48 → −0.98 ± 1.67 | +4.05 ± 3.62 → +3.36 ± 2.91 | −2.12 ± 2.95 → −1.12 ± 1.76 | 0.69 → 0.30 |
+
+- **The verdict holds and sharpens: nothing beats showing every outcome.** No policy wins
+  in any cell at either length, before or after.
+- **At 300 decisions little changes.** Hiding a whole set still loses at low targets,
+  now also at 90% with patience 10 s (−3.37 ± 0.85, which was −1.14 ± 0.85), and cover
+  still loses at a 20% target. The guard stays undetermined everywhere. Most of these
+  people had not yet saturated by 300 decisions except at 30% with patience 10 s, where
+  ability ended at 4.40 and now ends at 1.50.
+- **At 1000 decisions the old results were mostly the saturated regime.** Before, only
+  two differences cleared 2 SE; after, nine do. Reward under `on` rises up to 3.7×
+  (134 → 492 at 30%, 10 s), because the chance served stays near the target instead of
+  going to 1, so right answers keep paying `1 − p`.
+- **The guard now loses in one cell**, patience 3 s at a 30% target (−25.44 ± 10.20,
+  2.5 SE), which the saturated run could not show. It is undetermined elsewhere.
+- **The hidden-outcome weights still barely learn in 300 decisions.** Under `off`, 10 s,
+  30%, `θ[2:]` ended at (0.024, 1.02), sd (0.074, 0.034) over seeds, against (0.029, 1.02)
+  before: they stay near their starting prior either way, so that is a property of the
+  rate `a`, not of the saturation.
 - The people are simulated with the guard's own model; on a human, the 4 s / p^0.7
   solve-time model, the starting prior and the one-point margin are untested.
 
@@ -1636,3 +1741,99 @@ people; RMSE is from fitting times alone:
   added to the fit on a real player it moved `f` from 3.0 to 0.0; a human's leave
   times are the test that matters.
 
+
+## Ability ceiling: since 2026-10-19
+
+**The problem.** The simulated person in `controller.run`, which every controller,
+feedback-policy and recovery experiment on the question-type task is built on, outgrew
+the question bank. Ability rose by `CORRECTION_GAIN` (0.06) per corrected miss, never
+decayed and had no ceiling. A correction needs a miss, and the target keeps misses
+coming, so ability kept climbing until no type in the bank could produce one. The Elo
+ratings that choose questions lagged behind, and then every chance served was about 1
+whatever the target: reward per question (`1 − p`) went to 0, `V(0)` decayed, and hidden
+outcomes carried no signal. Found at f = k = 0.8, `Environment(0.5, 0.25, "off")`, seed 0:
+ability 0.54 at 50 decisions, 2.4 at 100, 6.06 at 200, 8.22 at 300, against a hardest
+type at 2.2. The original code (commit 1026a6a) does the same.
+
+**Measured.** Three people, five targets, 4 seeds, review 0.25, feedback `on`, 1000 start
+decisions. "Saturated" is the share of start decisions at which the true chance on every
+type in the bank was above 0.95; "served" is the mean true chance on fresh questions in the
+second half of the run. The mean hardest type was 3.05 logits.
+
+| person | target | ability at 100 / 300 / 1000, before | saturated, before | served, before → after | ability at 1000, after |
+|---|---|---|---|---|---|
+| f 0.8, k 0.8 | 90% | 1.80 / 2.78 / 3.89 | 0% | 0.977 → 0.910 | 1.67 |
+| | 75% | 1.86 / 4.23 / 5.16 | 15% | 0.985 → 0.812 | 1.67 |
+| | 50% | 3.50 / 8.17 / 8.28 | 73% | 0.997 → 0.565 | 1.67 |
+| | 30% | 0.75 / 6.19 / 13.61 | 67% | 0.984 → 0.263 | 1.67 |
+| | 20% | 0.12 / 2.11 / 15.06 | 52% | 0.921 → 0.205 | 1.66 |
+| f 1.2, k 0.4 | 90% | 2.12 / 3.20 / 4.47 | 0% | 0.984 → 0.908 | 1.67 |
+| | 75% | 2.63 / 4.51 / 5.89 | 24% | 0.984 → 0.832 | 1.67 |
+| | 50% | 3.72 / 7.65 / 7.90 | 82% | 0.997 → 0.535 | 1.67 |
+| | 30% | 1.44 / 9.51 / 18.13 | 77% | 1.000 → 0.267 | 1.67 |
+| | 20% | 0.92 / 6.75 / 21.12 | 71% | 1.000 → 0.216 | 1.67 |
+| f 0.6, k 1.2 | 90% | 0.99 / 1.73 / 2.87 | 0% | 0.965 → 0.907 | 1.44 |
+| | 75% | 1.31 / 4.13 / 4.63 | 0% | 0.980 → 0.829 | 1.67 |
+| | 50% | 1.20 / 5.77 / 8.29 | 73% | 0.998 → 0.526 | 1.67 |
+| | 30% | 0.15 / 0.72 / 8.07 | 36% | 0.710 → 0.188 | 1.13 |
+| | 20% | 0.15 / 1.57 / 2.73 | 19% | 0.337 → 0.123 | 0.86 |
+
+- **Before, the target stopped mattering.** At every target of 50% or below, at least one
+  person spent more than half of the run saturated, and the chance served in the second
+  half was 0.92 to 1.00 except for the reluctant person at 30% and 20%. Ability reached
+  up to 21 logits.
+- **After, nobody saturates**, at any target, and the chance served in the second half
+  sits within 0.07 of the target in 11 of 15 cells. The rest: at 75% the bank's discrete
+  types put it at 0.81 to 0.83, and the reluctant person at low targets is
+  served below target (0.19 at 30%, 0.12 at 20%), because their Elo rating, built on
+  few answers, runs ahead of them.
+- `tests/test_competence.py` pins the 1000-decision case: ability stays under the
+  ceiling and the chance served in the second half is within 0.1 of a 50% target, and
+  without the ceiling the person ends more than 2 logits past the hardest type, at a
+  chance above 0.95.
+
+**The fix: a ceiling on ability, reached gradually.**
+
+```
+gain = CORRECTION_GAIN · (1 − exp(−max(0, ceiling − ability) / CEILING_WIDTH))
+ceiling = max(type difficulty) + logit(HARDEST_AT_CEILING)      (0.2, so about −1.39)
+```
+
+with `CEILING_WIDTH = 1` logit. Far from the ceiling a correction is worth what it was;
+nearer, it is worth less; at the ceiling, nothing. The ceiling is set from the person's
+own bank so that the hardest type is still answered right 20% of the time at the end,
+which keeps the lowest target the controller may choose servable. Rollouts do the same
+from the rated bank (`measured`), so the controller is not handed the true ceiling.
+
+Why this one, of the three options:
+
+- **Harder types alone cannot keep up.** Growth was linear in corrections, and at a 50%
+  target ability climbed about 3.8 logits per 100 decisions while the bank lasted. A
+  bank would have to reach 30 or more logits to cover 1000 decisions, and no arithmetic
+  bank, or person, spans that. Harder types also change what real people are served in
+  the app.
+- **Forgetting needs a clock the simulator does not have,** and a rate and a baseline
+  that nothing here measures. It would also make the level ability settles at depend on
+  how many corrections a setting produces, so some settings would still leave the bank.
+- **A ceiling is the smallest change** and matches what is known about practice: gains
+  shrink as performance approaches an asymptote (the power law of practice, Newell and
+  Rosenbloom 1981; for single learners the exponential approach to an asymptote fits
+  better, Heathcote, Brown and Mewhort 2000). Far from the ceiling the rule is the old
+  one, so early-run dynamics change only slightly (a correction at ability 0 is worth
+  0.049 rather than 0.06 with this person's ceiling near 1.7). With no ceiling, which is
+  the default on `ModelState` and so the case for the single-`diff` task and the app's
+  bookkeeping, it is the old rule exactly.
+
+**What it assumes.** That a person's ceiling lies inside the bank, at a fixed place
+relative to its hardest type. That is a claim about the bank's design (it spans the
+people who use it), not something measured on a human, and the ceiling is the same
+function of the bank for every simulated person. A person whose real ceiling is above
+the bank still outgrows it; the bank would then need harder types, and the ratings
+would show it (every type near 1).
+
+**What changes.** Every `controller.run` result: the regression scenarios built on it
+were re-recorded, the feedback-policy tables were re-run (see "Feedback, question by
+question"), and so was the fixed default against `InfoController` (see "Planning to
+measure"), where measuring's reward advantage did not survive. The single-`diff` recovery pipelines, the direct `Simulation` scenarios and
+the app session are unchanged. Results above that predate this section were measured
+on the person who outgrew the bank.
