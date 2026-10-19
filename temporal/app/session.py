@@ -17,12 +17,14 @@ import numpy as np
 from ..controller import CANDIDATES, REVIEW_LEVELS, InfoController, plan_in_worker
 from ..inference import fit, passages_to_frame
 from ..model.accumulator import snap_cost, snap_value
+from ..model import feedback as fb
 from ..model.competence import settle_skipped, update_ability
-from ..model.conditions import cost_components, stage_conditions, value_at_choice_point
+from ..model.conditions import cost_components, stage_conditions, stay_cost, value_at_choice_point
 from ..model.params import ModelState, UserParams
 from ..model.persistence import fit_patience
 from ..model.questions import TYPES, Ratings, choose_type
-from ..model.value import slot_reward, value_of_stage
+from ..model.simulation import GUARD_PRIOR
+from ..model.value import V, slot_reward, value_of_stage
 from .store import DATA_DIR, Store, closed_cleanly, state_from_dict, state_to_dict
 
 PLAN_EVERY = 5         # sets (start decisions) between controller plans
@@ -41,7 +43,7 @@ DEFAULTS = {
     "controller": False,
     "show_count": True,
     "show_score": True,
-    "feedback": True,
+    "feedback": "on",        # which outcomes are shown during a set (feedback.POLICIES)
     "show_choice": True,
     "forced": "continue",
 }
@@ -51,7 +53,10 @@ SETTINGS = tuple(DEFAULTS)
 # 3: the reaction terms went; what a set does to the next start decision is carried by
 #    the prediction error in `value` instead, so rows recorded under 1-2 hold a `value`
 #    that predates the carry and are not comparable with later ones.
-RULES = 3
+# 4: a hidden outcome lands what they believe it earned, not nothing (feedback.py), so
+#    errors recorded with feedback off under 3 are not comparable with later ones; and
+#    leaving from a question is its own race, logged with `leave_v` and `leave_cost`.
+RULES = 4
 
 
 # (ratings, failed returns per question), replayed from the record under current rules.
@@ -139,6 +144,8 @@ class Session:
         self.shown_this_set = set()
         self.last_miss = None
         self.retire_pending = None
+        self.leave_v = self.leave_cost = None  # the leave race's conditions on the question on screen
+        self.told = 0        # hidden outcomes the last set's score has to tell
         self.screen = None   # "question", "redo", "start", or None between screens
         self.prompt_at = time.perf_counter()
         self.launched_at = time.time()
@@ -209,8 +216,9 @@ class Session:
                 self.state.initiation_passages.append(ev)
             elif node == "stage":
                 self.state.first_passage.append(ev)
-            elif node in ("answer", "skip") or (node == "abandon" and ev.get("screen") == "question"
-                                                and ev.get("rt") is not None):
+            elif node in ("answer", "skip", "leave") or (node == "abandon"
+                                                         and ev.get("screen") == "question"
+                                                         and ev.get("rt") is not None):
                 # Answered: kept going at least that long. Skipped or left: gave up.
                 self.state.persistence.append(ev)
 
@@ -236,6 +244,8 @@ class Session:
         self.store.append({"node": "return", "session": self.session,
                            "gap_seconds": time.time() - last if last else None})
         for name, value in saved.get("settings", {}).items():
+            if name == "feedback" and isinstance(value, bool):
+                value = fb.policy(value)  # saved before feedback was decided per question
             var = getattr(self, "v_" + name, None)
             if var is not None:
                 try:
@@ -299,6 +309,7 @@ class Session:
             f"questions owed   {len(s.missed):6d}",
             f"skipped (total)  {s.skips:6d}",
             f"skipped, pending {len(s.skipped):6d}",
+            f"hidden offset    {s.hidden_offset:+6.2f}",
             "",
             f"session          {self.session:6d}",
             f"sets done        {s.episodes:6d}",
@@ -316,7 +327,9 @@ class Session:
         s.stage_amt = self.v_stages.get()
         s.rpe = {r: 0 for r in range(s.stage_amt)}
         s.in_session = True  # playing a set is being in the task
-        self.feedback_this_set = self.v_feedback.get()
+        self.policy_this_set = fb.policy(self.v_feedback.get())
+        self.hidden = []  # (outcome, believed) for each outcome kept for the score
+        self.shown_passed = 0  # right answers they have been shown
         self.reviewing = False
         self.source = None
         self.redo = False
@@ -330,7 +343,7 @@ class Session:
         s.slot_delta = 0.0  # no slot precedes the first one
         self.store.append({"node": "set_start", "session": self.session, "set": self.set_id,
                            "target": self.v_target.get(), "review_rate": self.v_review.get(),
-                           "feedback": self.feedback_this_set,
+                           "feedback": self.policy_this_set,
                            "controller": self.v_controller.get()})
         self.maybe_plan()
         self.next_stage()
@@ -370,13 +383,16 @@ class Session:
         text, self.answer = self.problem
         self.p_now = self.ratings.p(self.item)
 
+        # What staying in the task is worth from here, and costs, for the leave race.
+        self.leave_v, self.leave_cost = V(self.state, self.s), stay_cost(self.state)
+
         header = []
         if self.v_show_count.get():
             header.append(f"stage {self.s + 1} of {self.state.stage_amt}")
-        if self.v_show_score.get() and self.feedback_this_set:
-            header.append(f"{self.passed} right")
-        if self.reviewing and self.feedback_this_set:
-            header.append("review")  # flagged only with feedback on; it gives away a past miss
+        if self.v_show_score.get() and self.policy_this_set != "off":
+            header.append(f"{self.shown_passed} right")  # a hidden right is not counted yet
+        if self.reviewing and self.policy_this_set == "on":
+            header.append("review")  # flagged only with every outcome shown; it gives away a past miss
         self.render_problem(text, header)
         self.screen = "question"
         self.persist()  # so an exit nothing sees still leaves a record of what was on screen
@@ -437,35 +453,44 @@ class Session:
         if was_review and not redo and not correct:
             self._failed_return()
         self.sync_measurement()
+        # Shown now, or kept for the score. A redo is always shown: they asked for it.
+        believed = fb.believed(p, self.state.hidden_offset)
+        guess = believed * (1.0 - p)
+        shown = redo or fb.shows(self.state, self.params, self.policy_this_set, self.s, correct,
+                                 guess, self.target_now, self.guard())
+        worth = 1.0 - p if correct else 0.0
         if correct:
             self.passed += 1
-            self.achievement += 1.0 - p
+            self.shown_passed += shown
+            self.achievement += worth
         else:
             self.wrong += 1
+        if not shown:
+            self.hidden.append((int(correct), believed))
         rec = {"node": "answer", **self.question_record(), "given": raw, "correct": correct,
-               "p": p, "rt": rt, "skipped": False, "slip": slip}
+               "p": p, "rt": rt, "skipped": False, "slip": slip, "shown": shown}
         self.state.persistence.append(rec)
         self.store.append(rec)
-        self.land()
+        self.land(worth, shown, guess)
         self.persist()
         self.reviewing = False
         self.source = None
         self.redo = False
 
-        if correct or not self.feedback_this_set:
-            # No redo prompt with feedback hidden: it would give the miss away. Owed
+        if correct or not shown:
+            # No redo prompt for a hidden miss: it would give the miss away. Owed
             # questions come back through review instead.
-            self.after_feedback(correct, self.advance)
+            self.after_feedback(shown, correct, self.advance)
         elif not self.v_show_choice.get():
             if self.v_forced.get() == "repeat":
                 self.reviewing = True
                 self.source = "missed"
                 self.redo = True
-                self.after_feedback(correct, self.next_stage)
+                self.after_feedback(shown, correct, self.next_stage)
             else:
-                self.after_feedback(correct, self.advance)
+                self.after_feedback(shown, correct, self.advance)
         else:
-            self.after_feedback(correct, self.ask_repeat)
+            self.after_feedback(shown, correct, self.ask_repeat)
 
     # They gave up on the question on screen. How long they worked on it first is the
     # measurement; a skip is neither right nor wrong, so the ratings do not move.
@@ -489,7 +514,7 @@ class Session:
         rec = {"node": "skip", **self.question_record(), "rt": rt, "skipped": True}
         self.state.persistence.append(rec)
         self.store.append(rec)
-        self.land()  # the slot is spent and earned nothing, which is itself an error
+        self.land(0.0, True, 0.0)  # the slot is spent and earned nothing, which is itself an error
         self.persist()
         self.reviewing = False
         self.source = None
@@ -497,21 +522,43 @@ class Session:
         self.last_miss = None
         self.advance()
 
-    # The outcome just seen lands as reward and becomes a prediction error. Run per
+    # They stopped for good from the question on screen ("I'm done" on it): the leave race
+    # (persistence.py). The set is walked out of and the app closes; what was hidden is
+    # never told.
+    def on_leave(self, rt=None):
+        if self.closed or self.screen != "question":
+            return
+        if rt is None:
+            rt = time.perf_counter() - self.shown_at
+        self.screen = None
+        rec = {"node": "leave", **self.question_record(), "rt": rt, "skipped": False,
+               "left": True}
+        self.state.persistence.append(rec)
+        self.store.append(rec)
+        self.close_set(abandoned=True, left=True)
+        self.quit()
+
+    # The (f, k, patience) the feedback guard plans with: the controller's estimate, or a
+    # prior until there is one.
+    def guard(self):
+        est = getattr(self.controller, "est", None)
+        return GUARD_PRIOR if est is None else (est.f, est.k, est.patience)
+
+    # The outcome just answered lands as reward and becomes a prediction error. Run per
     # outcome, not per slot, and before the redo prompt: they see how the question went,
-    # that lands, and then they decide whether to take it again. With feedback hidden
-    # nothing lands until the end-of-set score, which pays the set in one lump.
-    def land(self):
+    # that lands, and then they decide whether to take it again. A hidden outcome lands
+    # what they believe it earned, and the end-of-set score pays the rest.
+    def land(self, worth, shown, guess):
         last = self.state.stage_amt - 1
-        reward, self.credited = slot_reward(self.state, self.achievement, self.credited,
-                                            self.feedback_this_set, self.s == last)
+        reward, self.credited = slot_reward(self.state, worth, shown, guess, self.achievement,
+                                            self.credited, self.s == last)
         delta = value_of_stage(self.state, self.params, self.s, reward)
         self.state.rpe[self.s] = delta
         self.state.slot_delta = delta
         self.episode_deltas.append(delta)
 
-    def after_feedback(self, correct, then):
-        if self.feedback_this_set:
+    def after_feedback(self, shown, correct, then):
+        if shown:
             self.flash("correct" if correct else "wrong", then)
         else:
             then()
@@ -549,17 +596,28 @@ class Session:
         self.next_stage()
 
     def end_episode(self, abandoned):
+        self.close_set(abandoned)
+        self.ask_initiate()
+
+    # The set's bookkeeping, and its record. A finished set's score tells them every
+    # hidden outcome, which teaches them what a hidden outcome means; one walked out of
+    # tells them nothing.
+    def close_set(self, abandoned, left=False):
         s = self.state
         n = s.stage_amt
+        told = [] if abandoned else self.hidden
+        for outcome, believed in told:
+            s.hidden_offset = fb.learn(s.hidden_offset, outcome, believed)
+        self.told = len(told)
         s.total_reward += self.achievement
         s.last_review_load = self.review_showings / n
         s.last_episode_effort = 1.0 + s.last_review_load
         s.last_episode_passed = min(self.passed / n, 1.0)
         s.last_achievement = self.achievement / n
-        s.last_feedback = int(self.feedback_this_set)
-        missed_share = min(self.wrong / n, 1.0)
-        s.last_seen_miss = missed_share if self.feedback_this_set else 0.0
-        s.last_unseen_miss = 0.0 if self.feedback_this_set else missed_share
+        s.last_feedback = int(not self.hidden)
+        unseen = sum(1 - o for o, _ in self.hidden)
+        s.last_seen_miss = min((self.wrong - unseen) / n, 1.0)
+        s.last_unseen_miss = min(unseen / n, 1.0)
         # How the set went against what was predicted of it, carried into the decision
         # to start another one. A set walked out of was never judged.
         s.last_set_delta = 0.0 if abandoned else float(sum(self.episode_deltas))
@@ -568,15 +626,16 @@ class Session:
         else:
             s.episodes += 1
         self.store.append({"node": "set_end", "session": self.session, "set": self.set_id,
-                           "abandoned": abandoned, "passed": s.last_episode_passed,
+                           "abandoned": abandoned, "left": left, "passed": s.last_episode_passed,
                            "achievement": s.last_achievement, "review_load": s.last_review_load,
                            "skips": self.skips, "seen_miss": s.last_seen_miss,
                            "unseen_miss": s.last_unseen_miss, "feedback": s.last_feedback,
+                           "hidden": len(self.hidden), "hidden_offset": s.hidden_offset,
                            "set_delta": s.last_set_delta})
         self.persist()
-        self.ask_initiate()
 
-    # The start decision: the next set, or stop. Stopping closes the app.
+    # The start decision: the next set, or stop. Stopping closes the app. After a set with
+    # outcomes kept back, the prompt carries the score that tells them.
     def ask_initiate(self):
         s = self.state
         s.reentry_cost = round(self.v_cold.get(), 3)
@@ -606,7 +665,11 @@ class Session:
             else:
                 self.start_episode()
 
-        self.ask_decision("start the next set?", "start the next set", "I'm done", done)
+        prompt = "start the next set?"
+        if getattr(self, "told", 0):
+            prompt = f"this set: {self.passed} right. {prompt}"
+        self.told = 0
+        self.ask_decision(prompt, "start the next set", "I'm done", done)
 
     # ------------------------------------------------------------ owed questions
 
@@ -656,8 +719,9 @@ class Session:
                 "question": self.problem[0], "answer": self.problem[1], "p": self.p_now,
                 "stage_amt": self.state.stage_amt, "review": self.reviewing, "redo": self.redo,
                 "delta": self.state.slot_delta,
+                "leave_v": self.leave_v, "leave_cost": self.leave_cost,
                 "source": self.source, "first_of_launch": self.first_of_launch,
-                "feedback": self.feedback_this_set, "target": self.target_now}
+                "feedback": self.policy_this_set, "target": self.target_now}
 
     def on_screen(self):
         rec = {"screen": self.screen}
@@ -666,7 +730,7 @@ class Session:
         return rec
 
     # The abandon event: where they were when they left, and for how long. Leaving from a
-    # question is giving up on it, so it joins the persistence data like a skip.
+    # question is the leave race ending, so it joins the persistence data as a leave.
     def exit_record(self):
         rec = {"node": "abandon", "session": self.session, "set": self.set_id,
                "slot": getattr(self, "s", 0), "screen": self.screen,
@@ -674,7 +738,7 @@ class Session:
                "seconds_since_launch": time.time() - self.launched_at}
         if self.screen == "question":
             rec.update(self.question_record(), rt=time.perf_counter() - self.shown_at,
-                       skipped=True, left=True)
+                       skipped=False, left=True)
         elif self.screen in ("start", "redo"):
             rec["prompt_seconds"] = time.perf_counter() - self.prompt_at
         return rec
@@ -777,7 +841,7 @@ class Session:
                            "rows": est.rows, "f": est.f, "k": est.k,
                            "patience": est.patience, "t0": est.t0, "note": est.note,
                            "target": env.target_p, "review_rate": env.review_rate,
-                           "feedback_on": env.feedback, "return_skipped": env.return_skipped,
+                           "feedback": env.feedback, "return_skipped": env.return_skipped,
                            "redo_prompts": env.redo_prompts, "switched": env != update.previous,
                            "reason": update.reason})
         self.refresh_stats()

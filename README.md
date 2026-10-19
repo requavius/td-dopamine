@@ -1,7 +1,7 @@
 # Modeling motivation through ordinary task behavior
 
 A computational model of task initiation. From choices, reaction times and how long
-someone works on a question before giving up, it recovers how strongly a person is
+someone works on a question before giving up on it or stopping altogether, it recovers how strongly a person is
 pulled by reward, how strongly they are pushed away by effort, and how they react to
 the set they just played.
 
@@ -60,8 +60,33 @@ cost  = REPEAT_COST_SCALE · min(1/p, 8)               the effort it takes
 with `p` their chance on that question. It feeds a one-boundary accumulator (same
 `SIGMA` and `BOUND`); if it reaches the bound before they reach an answer, they give
 up. The time to give up then has a closed form, the inverse Gaussian (Wald)
-distribution (`model/persistence.py`). Giving up is a skip, or leaving if they close the app
-on that question.
+distribution (`model/persistence.py`). Giving up is a skip.
+
+### Leaving from a question (since 2026-10-19)
+
+Stopping for good is not only something done between sets. While the skip accumulator
+runs, a second one races it and the time to solve, built toward leaving the task:
+
+```
+leave drift = k · stay cost − f · stay value
+stay value  = V(s) + δ                           the rest of the task, valued from this slot
+stay cost   = WARM_COST + EFFORT_WEIGHT · effort  what the start decision would cost in session
+```
+
+It is the start decision's "I'm done", taken early: same drift form, same `f`, `k`,
+patience, `SIGMA` and `BOUND`, with the value of being at slot `s` in place of `V(0)`.
+It adds no parameter. If it wins, the set is abandoned, nothing hidden is ever told,
+and the next start decision is cold. In the app it is the "I'm done" button on every
+question, and closing the window on a question is the same event. Each question is then
+three-way censored data: an answer survived both accumulators, a skip is the skip
+density having outlasted leaving, a leave is the leave density having outlasted
+skipping (`persistence.neg_log_likelihood`). Records from before it existed carry no
+`leave_v` and are scored exactly as before.
+
+The two accumulators differ only in what carrying on is worth and costs: one question,
+`p(1 − p)` against its `1/p`, or the whole rest of the task against what starting a set
+costs. A hard question therefore mostly produces skips, and a run of seen misses that
+drags `V(s) + δ` down mostly produces leaving.
 
 - **Patience is per person.** Model time becomes seconds through `patience`, the
   seconds per unit of model time; someone who skips at a glance has a small one. It
@@ -75,14 +100,15 @@ on that question.
   not describe, at a uniform time within 60 s. One odd skip (79 + 85, an
   83% chance for that player, dropped after 2.2 s) then cannot decide the estimate
   on its own.
-- **Leaving from the first question after coming back** is giving up on it too. In
-  the simulator, giving up on the first question of a set started cold abandons the
-  set, and the next start decision is cold again.
+- **Leaving is its own race now** (above). With it switched off (`leaves=False`, every
+  designed recovery pipeline), giving up on the first question of a set started cold
+  still abandons the set, as it did before.
 - **A skip is neither right nor wrong**, so it does not move the ratings.
 - **The last question carries into this one.** `δ` is the prediction error from the
   slot just left: seeing that you missed the last one makes giving up on this one more
-  likely, and seeing that you got a hard one right makes it less. With feedback hidden
-  there is no error to carry, so `δ` is 0 and only `p` matters.
+  likely, and seeing that you got a hard one right makes it less. With the outcome
+  hidden the error is only how far what they believe they earned was from what they
+  expected (see "Feedback, question by question").
 - **It is used for patience only.** `f` and `k` come from decisions; answer and skip
   times add nothing to them (see "Skips do not help estimate `f` and `k`" under
   Current results).
@@ -101,25 +127,32 @@ environment so the person keeps engaging and keeps being challenged.
 Every few sets the controller re-fits the person's `f` and `k` (shrunk toward a prior
 while data is thin) and their patience from time on questions. It then copies the
 person exactly as they are (measured ability, how hard each question type is for them,
-what they still owe, their current value) and simulates 96 candidate settings forward
+what they still owe, their current value) and simulates 192 candidate settings forward
 with the *estimated* parameters:
 
 - a **target chance of getting a question right**, 90% down to 20%;
 - a **review rate**: how an unanswered question comes back;
-- **feedback shown or hidden**;
+- **a feedback policy**, decided question by question: every outcome shown, every
+  outcome kept for the end-of-set score, `guard` (a miss is kept back when showing it
+  would raise the chance they leave on the next question by a point or more), or
+  `guard+cover` (that, and rights kept back as often as misses are, so hiding is no
+  tell). See "Feedback, question by question";
 - **whether questions they skipped come back** through review, or are dropped. With
   review at 0 nothing comes back;
 - **redo prompts**: after each miss they see, ask whether to take it again (the app's
-  "offer repeat-or-continue"). These 12 settings (6 targets × feedback) have review 0, so
-  a miss comes back only when the person chooses it.
+  "offer repeat-or-continue"). These 24 settings (6 targets × feedback policy) have
+  review 0, so a miss comes back only when the person chooses it.
 
 Until 2026-10-11 there were 84 settings, all with scheduled review, and the rollouts
 always scheduled review even though the app asks redos. The planner was simulating a
 task the person never saw. Rollouts now follow the setting's review mode.
 
-Rollouts include giving up on questions, driven by the same estimated `f` and `k` and
-the person's estimated patience, so a hard target is worth less for someone who would
-skip most of it.
+Rollouts include giving up on questions and leaving from them, driven by the same
+estimated `f` and `k` and the person's estimated patience, so a hard target is worth
+less for someone who would skip most of it, and a setting that drives them out partway
+through a set pays for the sets they never finish. Until 2026-10-19 there were 96
+settings with feedback on or off for a whole set, and nobody in a rollout could leave
+except from the first question after coming back.
 
 There are two controllers. `Controller`, described here, plans for reward.
 `InfoController` (see "Planning to measure") plans to measure `f` and `k`, and is the one
@@ -440,16 +473,19 @@ V(s) = θ · φ(s)                    φ(s) = [1, stage position]
 At a set's last slot, `V(s+1)` is `V(0)`, the start of the next set: the continuing
 bootstrap (see "Value bootstrap").
 
-**A slot's reward arrives when the person is shown it.** With feedback on, a question's
-worth lands at that slot: `(1 − p)` if they got it right, nothing if they did not.
-With feedback off nothing lands until the end-of-set score, which pays the whole set at
-once. A set totals the same either way: feedback moves *when* the signal arrives, not
-how much (`value.slot_reward`). That timing is the whole of feedback's effect on
+**A slot's reward arrives when the person is shown it.** A shown outcome lands its worth
+at that slot: `(1 − p)` if they got it right, nothing if they did not. A hidden one
+lands what they believe it earned, their chance of having got it right given that it
+was hidden, times `(1 − p)`, and the end-of-set score pays the rest. A set totals the
+same either way: feedback moves *when* the signal arrives, and how wrong the guess
+was, not how much (`value.slot_reward`). That timing is the whole of feedback's effect on
 motivation, and it is what the three reaction terms used to stand in for.
 
-With feedback hidden this is exactly the old schedule, one lump of
-`ACHIEVEMENT_SCALE · achievement / stage_amt` at the last slot, so the only change is
-that showing an outcome moves its reward forward to the slot it happened at.
+Until 2026-10-19 a hidden outcome landed nothing, so a set with feedback off paid one
+lump of `ACHIEVEMENT_SCALE · achievement / stage_amt` at the last slot. That cannot
+express a person reading the hiding itself: if a hidden outcome is worth nothing
+whatever they infer, learning that "hidden means wrong" changes nothing. See
+"Feedback, question by question" for the belief and how it is learned.
 
 `φ` used to carry `difficulty` as a second feature. It was doing no work: `diff`
 never varies during learning, so `θ[1]` collapsed to exactly `θ[0]·d`, perfectly
@@ -617,8 +653,15 @@ plan uses every session. "Export all decisions to csv" writes `data/decisions.cs
 
 Tick **"controller sets target, review, feedback, skipped"** and it plans in a separate
 process every 5 sets and moves the settings panel itself, with a line saying why. With
-it off, the target chance, review rate and the feedback and skipped checkboxes are
-yours. Feedback changes apply from the next set.
+it off, the target chance, review rate, the feedback policy and the skipped checkbox are
+yours. A feedback policy applies from the next set; within a set it decides each
+question. When a set kept any outcome back, the next start prompt opens with the score
+("this set: 3 right."), which is how hidden outcomes are told. Under the guard policies
+the "N right" header counts only rights that were shown.
+
+**"I'm done" on a question** stops for good from there: it logs a `leave` with the time
+on the question and the leave race's conditions (`leave_v`, `leave_cost`), ends the set
+as abandoned, and closes the app.
 
 Three properties of human data follow from this flow, and all three matter for inference:
 
@@ -770,7 +813,8 @@ temporal/
     conditions.py     the (value, cost) each decision node feeds it
     value.py          TD value of a set, and when a slot's reward lands
     competence.py     chance of a right answer, and how it grows
-    persistence.py    giving up on a question: quit drift, patience, closed-form likelihood
+    persistence.py    giving up on a question or leaving from it: the two races, patience, closed-form likelihood
+    feedback.py       which outcomes are shown, what a hidden one is worth, how that is learned
     confidence.py     what a person believes their chance is, and how outcomes move it
     questions.py      question types, their priors, and per-person Elo ratings
     simulation.py     the simulated learner: sets, review, redo prompts, start decisions
@@ -1208,7 +1252,18 @@ expected. The correlation is a property of the task, not of the carry.
   value asserts they are one sensitivity. That is a substantive claim about
   people rather than a simplification, and it has not been tested against a human.
 - The prediction error is clipped at `±DELTA_CLIP` (1.0) so `value` stays on a bounded
-  grid. It binds on about 0.5% of decisions with feedback hidden and never with it on.
+  grid. It bound on about 0.5% of decisions with feedback hidden and never with it on,
+  measured when a hidden outcome still landed nothing.
+- How fast a person learns what a hidden outcome means, `HIDDEN_RATE = 0.5`, is assumed,
+  not fitted, and is the same for everyone. The guard's margin (`GUARD_MARGIN`, one point
+  of leave chance) is a judgment call. A person who knows they got an arithmetic question
+  wrong without being told is not modelled: their belief about a hidden outcome uses
+  only their chance on it and what hiding has meant before.
+- The guard plans the next question's leave chance from the simulated solve-time model
+  (median `4 s / p^0.7`) even for a human, and from the controller's estimate of
+  `f`, `k` and patience, or the prior (0.8, 0.8, 10 s) until there is one.
+- Confidence still moves on a hidden outcome as if it had been seen. That predates
+  per-question feedback and is unchanged.
 - Learning still saturates at a fixed difficulty, and under `choice` and `quiet` the
   missed list grows without bound; nothing forgets.
 - Value and cost are discretized (`VALUE_STEP`, `COST_STEP`) to keep the number of

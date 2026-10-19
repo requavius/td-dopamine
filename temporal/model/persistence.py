@@ -1,4 +1,13 @@
-"""Giving up on a question: quit drift, patience, and the Wald likelihood of the times."""
+"""Giving up on a question or on the session: quit drift, patience, and the Wald likelihood of the times.
+
+While a question is being worked on, two accumulators race the time it takes to solve it.
+One builds toward skipping the question, the other toward leaving: stopping for good, the
+decision the start prompt's "I'm done" takes between sets. Both are the start drive
+reversed, `k * cost - f * value`, with the same f, k and patience. They differ in what
+carrying on is worth and costs: one question, `p(1 - p)` against its `1/p`, or the rest of
+the task as the person values it from where they are, `V(s)`, against what starting a set
+costs in session. Both add the error carried out of the slot just left.
+"""
 import math
 import random
 
@@ -31,6 +40,14 @@ def conditions(p, stage_amt, delta=0.0):
     value = value + np.clip(np.asarray(delta, dtype=float), -DELTA_CLIP, DELTA_CLIP)
     cost = REPEAT_COST_SCALE * np.minimum(1.0 / p, MAX_REPEAT_ATTEMPTS) # the effort it takes
     return value, cost
+
+
+# Value of staying in the task while on a question: what the rest of it is worth from
+# here, `v_rest = V(s)`, plus the carried error. Its cost is what the start decision's would
+# be, in session (conditions.stay_cost): leaving now is that decision, taken early.
+def leave_value(v_rest, delta=0.0):
+    return (np.asarray(v_rest, dtype=float)
+            + np.clip(np.asarray(delta, dtype=float), -DELTA_CLIP, DELTA_CLIP))
 
 
 def quit_drift(f, k, value, cost):
@@ -75,17 +92,29 @@ def draw_solve_seconds(p):
     return median * math.exp(random.gauss(0.0, SOLVE_SPREAD))
 
 
-# One row per question worked on: value, cost, whether they gave up, seconds.
+# One row per question worked on: value and cost of the question and of staying in the
+# task, how it ended, seconds. `leave_value` is NaN for a record that predates leaving
+# (no `leave_v`): such a row has no leave term, and a left one counts as a skip, as it did.
 def attempts_to_frame(attempts):
     # `p` is the chance as the environment knew it -- all a fit on a real person has.
     # Records without a time (an exit nobody saw) are left out.
-    rows = [(a["p"], a["rt"], bool(a.get("skipped", False)), a.get("stage_amt") or 4,
-             float(a.get("delta") or 0.0))
-            for a in attempts
-            if a.get("rt") is not None and a["rt"] > 0 and a.get("p") is not None]
-    df = pd.DataFrame(rows, columns=["p", "rt", "skipped", "stage_amt", "delta"])
+    rows = []
+    for a in attempts:
+        if a.get("rt") is None or a["rt"] <= 0 or a.get("p") is None:
+            continue
+        racing = a.get("leave_v") is not None
+        left = bool(a.get("left")) and racing
+        rows.append((a["p"], a["rt"], bool(a.get("skipped", False)) and not left, left,
+                     a.get("stage_amt") or 4, float(a.get("delta") or 0.0),
+                     float(a["leave_v"]) if racing else np.nan,
+                     float(a["leave_cost"]) if racing else np.nan))
+    df = pd.DataFrame(rows, columns=["p", "rt", "skipped", "left", "stage_amt", "delta",
+                                     "v_rest", "leave_cost"])
     value, cost = conditions(df["p"], df["stage_amt"], df["delta"])
     return pd.DataFrame({"value": value, "cost": cost, "skipped": df["skipped"].to_numpy(dtype=bool),
+                         "left": df["left"].to_numpy(dtype=bool),
+                         "leave_value": leave_value(df["v_rest"], df["delta"]),
+                         "leave_cost": df["leave_cost"].to_numpy(dtype=float),
                          "seconds": df["rt"].to_numpy(dtype=float)})
 
 
@@ -97,15 +126,28 @@ def neg_log_likelihood(f, k, frame, patience=PATIENCE, lapse=LAPSE):
     s = frame["seconds"].to_numpy()
     t = s / patience # seconds into model time
     gave_up = frame["skipped"].to_numpy(dtype=bool)
+    zero = np.zeros(len(s))
+    left = frame["left"].to_numpy(dtype=bool) if "left" in frame else zero.astype(bool)
+    leave_value = frame["leave_value"].to_numpy() if "leave_value" in frame else zero + np.nan
+    racing = np.isfinite(leave_value)  # the leave accumulator was running
+    mu_leave = quit_drift(f, k, np.nan_to_num(leave_value),
+                          np.nan_to_num(frame["leave_cost"].to_numpy()) if racing.any() else zero)
     with np.errstate(divide="ignore"):
         # log(patience) is the change of variable to a density per second; without it
         # patience could not be fitted.
-        model_d = np.log1p(-lapse) + log_density(t, mu) - math.log(patience)
-        model_s = np.log1p(-lapse) + log_survival(t, mu)
-        lapse_d = np.where(s < LAPSE_SECONDS, np.log(lapse / LAPSE_SECONDS), -np.inf)
+        d_skip = log_density(t, mu) - math.log(patience)
+        s_skip = log_survival(t, mu)
+        d_leave = log_density(t, mu_leave) - math.log(patience)
+        s_leave = np.where(racing, log_survival(t, mu_leave), 0.0) # no race, nothing to survive
+        # A lapse is a give-up of either kind when both were possible.
+        lapse_d = np.where(s < LAPSE_SECONDS, np.log(lapse / LAPSE_SECONDS), -np.inf) \
+            - np.where(racing, math.log(2), 0.0)
         lapse_s = np.log(lapse * np.clip(1.0 - s / LAPSE_SECONDS, 0.0, None))
-    # Gave up: the density at that time. Answered: the survival past it.
-    ll = np.where(gave_up, np.logaddexp(model_d, lapse_d), np.logaddexp(model_s, lapse_s))
+    # Answered: survived both. Skipped: the skip density, having outlasted leaving. Left:
+    # the leave density, having outlasted skipping.
+    model = np.log1p(-lapse) + np.where(left, d_leave + s_skip,
+                                        np.where(gave_up, d_skip, s_skip) + s_leave)
+    ll = np.logaddexp(model, np.where(gave_up | left, lapse_d, lapse_s))
     return float(-ll.sum())
 
 

@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from ..model.feedback import POLICIES
 from ..model.persistence import attempts_to_frame
 from .session import DEFAULTS, MIN_FIT_ROWS, Session, fit_summary
 from .store import DATA_DIR as DESKTOP_DATA_DIR
@@ -38,7 +39,7 @@ COLLECT = os.environ.get("TEMPORAL_COLLECT", "0") == "1" # keep records of conse
 RESEARCHERS = {e.strip().lower() for e in os.environ.get("TEMPORAL_RESEARCHERS", "").split(",")
                if e.strip()}
 PANEL = os.environ.get("TEMPORAL_PANEL", "0") == "1" # dev stuff for every player
-CONSENT_VERSION = 1 # bump when the consent text in web/index.html changes
+CONSENT_VERSION = 2 # bump when the consent text in web/index.html changes
 IDLE_SECONDS = 2 * 3600 # a page silent this long is taken as closed
 PAGE = Path(__file__).parent / "static" / "index.html"
 TOKEN = re.compile(r"[0-9a-f]{32}")
@@ -47,6 +48,7 @@ EMAIL = re.compile(r"[a-z0-9_%+-][a-z0-9._%+-]*@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]
 # Range each setting may take, as the desktop app's widgets allow.
 LIMITS = {"target": (0.3, 0.95), "stages": (2, 8), "cold": (0.05, 1.5), "review": (0.0, 1.0)}
 FORCED = ("continue", "repeat")
+CHOICES = {"forced": FORCED, "feedback": POLICIES}  # settings that take one of a few words
 
 _pool = None
 _pool_lock = threading.Lock()
@@ -368,6 +370,16 @@ def skip(body: Timed):
         return app.payload()
 
 
+# "I'm done" on a question: stopping for good from there.
+@api.post("/api/leave")
+def leave(body: Timed):
+    pl, app = session(body.token)
+    with pl.lock:
+        live(pl, app, body.seq)
+        app.on_leave(None if body.rt is None else max(body.rt, 0.0))
+        return app.payload()
+
+
 @api.post("/api/decide")
 def decide(body: Decide):
     pl, app = session(body.token)
@@ -419,7 +431,7 @@ def settings(body: Settings):
             if name in LIMITS:
                 lo, hi = LIMITS[name]
                 value = min(max(value, lo), hi)
-            if name == "forced" and value not in FORCED:
+            if name in CHOICES and value not in CHOICES[name]:
                 continue
             getattr(app, "v_" + name).set(value)
         app.persist()

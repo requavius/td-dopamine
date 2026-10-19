@@ -41,6 +41,12 @@ def cost_components(state: ModelState) -> tuple:
     return base, EFFORT_WEIGHT * state.last_episode_effort  # what the last set took out of them
 
 
+# Leave node, cost: staying in the task, as the start decision would cost in session.
+# Leaving partway through a set is that decision taken early (persistence.leave_value).
+def stay_cost(state: ModelState) -> float:
+    return WARM_COST + EFFORT_WEIGHT * state.last_episode_effort
+
+
 # Redo node: (value, cost) after a miss. `s` is the slot, for discounting, and `item`
 # the question, for difficulty.
 def stage_conditions(state: ModelState, p: UserParams, s: int, item=None) -> tuple:

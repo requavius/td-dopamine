@@ -9,7 +9,8 @@ from .controller import Controller
 from .controller import run as run_person
 from .inference import assert_row_floor, fit, passages_to_frame
 from .model.accumulator import build_model
-from .model.params import REENTRY_COST_HIGH, REENTRY_COST_LOW, REENTRY_COST_MID, UserParams
+from .model.params import (PATIENCE, REENTRY_COST_HIGH, REENTRY_COST_LOW, REENTRY_COST_MID,
+                           UserParams)
 from .model.persistence import attempts_to_frame, fit_patience, fit_persistence
 from .model.simulation import Simulation
 from .plots import ASSETS, plot_recovery
@@ -114,10 +115,10 @@ def collect_reseeded(f_true, k_true, n_decisions=1200, warmups=RESEED_WARMUPS,
 # One person measured as the interface measures a human. Every controller update is an
 # exploration probe: the only source of sets with feedback hidden, which is what makes
 # the two ways a set's reward can be timed both appear in the data.
-def _probed_person(f_true, k_true, n_decisions, seed):
-    probe = Controller(explore=1.0, seed=seed, known=(f_true, k_true))
-    return run_person(UserParams(f=f_true, k=k_true), controller=probe,
-                      n_decisions=n_decisions, seed=seed)
+def _probed_person(f_true, k_true, n_decisions, seed, patience=PATIENCE, leaves=True):
+    probe = Controller(explore=1.0, seed=seed, known=(f_true, k_true, patience))
+    return run_person(UserParams(f=f_true, k=k_true, patience=patience), controller=probe,
+                      n_decisions=n_decisions, seed=seed, leaves=leaves)
 
 
 def _sweep(grid, reps, generate, out_path, title):

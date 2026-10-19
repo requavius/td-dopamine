@@ -6,6 +6,7 @@ import pandas as pd
 import pyddm
 
 from .model.accumulator import T_DUR, build_model
+from .model.params import PATIENCE
 from .model.persistence import neg_log_likelihood
 
 ROW_FLOOR = 400
@@ -88,7 +89,7 @@ def build_sample(df):
 
 
 # pyddm's likelihood loss plus the persistence likelihood of `attempts`.
-def _with_persistence(attempts):
+def _with_persistence(attempts, patience):
     class LossWithPersistence(pyddm.LossLikelihood):
         name = "Negative log likelihood, decisions + persistence"
 
@@ -96,15 +97,17 @@ def _with_persistence(attempts):
             drift = model.parameters()["drift"]
             # Both depend on the same f and k, so the two -log L add.
             return (super().loss(model)
-                    + neg_log_likelihood(float(drift["f_val"]), float(drift["k_val"]), attempts))
+                    + neg_log_likelihood(float(drift["f_val"]), float(drift["k_val"]), attempts,
+                                         patience))
 
     return LossWithPersistence
 
 
 # (f, k), plus T0 with `t0`. Two parameters is the whole model: how the last set moves
 # this person is carried by `value`, not by terms of its own.
-# `attempts` (persistence.attempts_to_frame) are fitted jointly with the decisions.
-def fit(df, attempts=None, t0=False):
+# `attempts` (persistence.attempts_to_frame) are fitted jointly with the decisions, at
+# `patience` seconds per unit of model time.
+def fit(df, attempts=None, t0=False, patience=PATIENCE):
     parameters = {"f_val": (0.0, 3.0), "k_val": (0.0, 3.0)}
     if t0:
         parameters["T0"] = T0_BOUNDS
@@ -112,7 +115,7 @@ def fit(df, attempts=None, t0=False):
     data = df[[*CONDITIONS, "GO", "RT"]].copy()
     data.attrs["undecided"] = df.attrs.get("undecided", {})
     if attempts is not None and len(attempts):
-        model.fit(build_sample(data), lossfunction=_with_persistence(attempts), verbose=False)
+        model.fit(build_sample(data), lossfunction=_with_persistence(attempts, patience), verbose=False)
     else:
         model.fit(build_sample(data), verbose=False)
 

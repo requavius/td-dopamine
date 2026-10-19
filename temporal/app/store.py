@@ -54,10 +54,12 @@ def state_from_dict(d):
     return st
 
 
-# Whether the record's last session ended through the app: "I'm done", or a logged exit.
+# Whether the record's last session ended through the app: "I'm done" between sets or on
+# a question, or a logged exit.
 def closed_cleanly(events):
     last = events[-1]
-    return last.get("node") == "abandon" or (last.get("node") == "start" and last.get("GO") == 0)
+    return (last.get("node") == "abandon" or (last.get("node") == "start" and last.get("GO") == 0)
+            or (last.get("node") == "set_end" and bool(last.get("left"))))
 
 
 class Store:

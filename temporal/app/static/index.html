@@ -111,7 +111,11 @@
       <label class="check"><input type="checkbox" data-set="controller"> controller sets target, review, feedback, skipped, redo prompts</label>
       <label class="check"><input type="checkbox" data-set="show_count"> show stage count</label>
       <label class="check"><input type="checkbox" data-set="show_score"> show score so far</label>
-      <label class="check"><input type="checkbox" data-set="feedback"> feedback (from next set)</label>
+      <label>feedback (from next set):</label>
+      <label class="check"><input type="radio" name="feedback" data-set="feedback" value="on"> every outcome shown</label>
+      <label class="check"><input type="radio" name="feedback" data-set="feedback" value="off"> kept for the end-of-set score</label>
+      <label class="check"><input type="radio" name="feedback" data-set="feedback" value="guard"> misses kept back when showing one risks you leaving</label>
+      <label class="check"><input type="radio" name="feedback" data-set="feedback" value="guard+cover"> that, and rights kept back as often</label>
       <label class="check"><input type="checkbox" data-set="show_choice"> offer repeat-or-continue</label>
       <label>when not offered, it:</label>
       <label class="check"><input type="radio" name="forced" data-set="forced" value="continue"> continues</label>
@@ -142,7 +146,9 @@
   <h3>What you will do</h3>
   <p>Answer short mental arithmetic questions in sets of a few questions. After a wrong
   answer you choose whether to try it again, and after each set whether to start another.
-  You can stop whenever you like, and play again on other days.</p>
+  Some answers are marked right or wrong straight away and some only at the end of the
+  set. You can stop whenever you like, even partway through a set, and play again on
+  other days.</p>
   <h3>What is recorded</h3>
   <p>Your email address; each question, your answer and whether it was right; how long
   you took to answer or to choose; when you skipped, stopped or left the page; and the
@@ -298,12 +304,13 @@ function drawQuestion(view) {
   const input = el("input", { class: "answer", inputmode: "numeric", autocomplete: "off",
                               "aria-label": "your answer" });
   const skipBtn = el("button", { onclick: skip }, el("kbd", {}, "esc"), "skip");
+  const doneBtn = el("button", { onclick: leave }, "I'm done");
   setScreen(
     el("div", { class: "header" }, view.header || ""),
     el("div", { class: "problem" }, view.text),
     input,
-    el("p", { class: "hint" }, "type the answer and press enter — or give up on it"),
-    skipBtn,
+    el("p", { class: "hint" }, "type the answer and press enter — or give up on it, or stop"),
+    el("div", { class: "row" }, skipBtn, doneBtn),
   );
   input.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); answer(input.value); }
@@ -349,6 +356,7 @@ async function send(path, extra) {
 }
 function answer(raw) { if (screen === "question") send("/api/answer", { raw }); }
 function skip() { if (screen === "question") send("/api/skip"); }
+function leave() { if (screen === "question") send("/api/leave"); }
 function decide(go) { if (screen === "decision") send("/api/decide", { go }); }
 
 // Leaving the page is closing the window: logged with what was on screen and for how long.

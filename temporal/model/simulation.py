@@ -1,4 +1,5 @@
-"""The simulated learner: plays sets, decides whether to start and redo, gives up."""
+"""The simulated learner: plays sets, decides whether to start and redo, gives up, leaves."""
+import math
 import random
 
 import numpy as np
@@ -6,13 +7,17 @@ import numpy as np
 from .accumulator import initiation_decision, stage_decision
 from .competence import draw_outcome, settle_skipped, sigmoid, success_prob, update_ability
 from .confidence import perceived, update as update_confidence
-from .conditions import cost_components, stage_conditions, value_at_choice_point
-from .params import ModelState, UserParams
-from .persistence import conditions, draw_quit_time, draw_solve_seconds, quit_drift
+from .conditions import cost_components, stage_conditions, stay_cost, value_at_choice_point
+from . import feedback as fb
+from .params import PATIENCE, ModelState, UserParams
+from .persistence import conditions, draw_quit_time, draw_solve_seconds, leave_value, quit_drift
 from .questions import choose_type
-from .value import ACHIEVEMENT_SCALE, slot_reward, value_of_stage
+from .value import ACHIEVEMENT_SCALE, V, slot_reward, value_of_stage
 
 SESSION_EXIT_STREAK = 3  # consecutive non-GO draws before the learner has left
+# The person as an environment with no estimate yet takes them to be, for the feedback
+# guard: (f, k, patience). The controller replaces it with its estimate.
+GUARD_PRIOR = (0.8, 0.8, PATIENCE)
 
 # Who decides whether a missed question comes back: the controller at review_rate per
 # slot (scheduled), the learner at the repeat node (choice), or nobody (quiet).
@@ -28,7 +33,7 @@ class Simulation:
     def __init__(self, params: UserParams, ability=None, reentry_cost=None,
                  review_mode="scheduled", review_rate=0.25, diff_spread=0.0,
                  target_p=0.75, feedback=True, ratings=None, reward="achievement",
-                 skips=False, return_skipped=False):
+                 skips=False, return_skipped=False, leaves=False):
         if review_mode not in REVIEW_MODES:
             raise ValueError(f"review_mode must be one of {REVIEW_MODES}, got {review_mode!r}")
         if not 0.0 <= review_rate <= 1.0:
@@ -40,11 +45,15 @@ class Simulation:
         self.review_mode = review_mode
         self.review_rate = review_rate
         self.target_p = target_p # serve the question type whose chance is nearest this
-        self.feedback = feedback # whether right/wrong is shown during a set
+        self.feedback = fb.policy(feedback) # which outcomes are shown during a set (feedback.py)
+        self.guard = GUARD_PRIOR # (f, k, patience) the feedback guard plans with
         self.ratings = ratings   # what the environment knows; None: use the true difficulties
         self.reward = reward
         self.skips = skips       # whether the learner can give up on a question (persistence.py)
         self.return_skipped = return_skipped # whether given-up questions come back through review
+        # Whether the learner can leave the task while on a question (persistence.py). Off,
+        # giving up on the first question of a set started cold is leaving, as it was.
+        self.leaves = leaves
         self.cold_start = False # whether the set about to be played was started from outside a session
         self.state = ModelState(t=1)
         if ability is not None:
@@ -77,28 +86,41 @@ class Simulation:
             return random.choice(pool)
         return None, None
 
-    # Work on a question until they answer or give up. True if they gave up.
-    def _gives_up(self, item, p_true, review):
+    # Work on a question at slot `s` until they answer, give up on it or leave the task.
+    # Returns "answered", "skipped" or "left".
+    def _works(self, s, item, p_true, review):
         state, params = self.state, self.params
         # They weigh the question by the chance they believe they have; solving it takes
         # the time the true chance says.
-        value, cost = conditions(perceived(p_true, state.confidence), state.stage_amt,
-                                 state.slot_delta)
+        p_hat = perceived(p_true, state.confidence)
+        value, cost = conditions(p_hat, state.stage_amt, state.slot_delta)
         solve = draw_solve_seconds(p_true)
         # A race in seconds: time needed to solve against time taken to give up.
         quit_at = (draw_quit_time(quit_drift(params.f, params.k, float(value), float(cost)))
                    * params.patience)
-        gave_up = quit_at < solve
+        leave_at = math.inf
+        if self.leaves:
+            v_rest = V(state, s)  # the rest of the task, valued from here
+            leave_cost = stay_cost(state)
+            leave_at = (draw_quit_time(quit_drift(params.f, params.k,
+                                                  float(leave_value(v_rest, state.slot_delta)),
+                                                  leave_cost))
+                        * params.patience)
+        first = min(solve, quit_at, leave_at)
+        how = "left" if leave_at == first else "skipped" if quit_at == first else "answered"
         # The record keeps the chance as the environment knew it, not the truth.
         known = (self.ratings.p(item) if self.ratings is not None and state.type_diffs is not None
                  else p_true)
-        state.persistence.append({
-            "p": known, "rt": min(quit_at, solve), "skipped": gave_up,
+        rec = {
+            "p": known, "rt": first, "skipped": how == "skipped",
             "stage_amt": state.stage_amt, "item": item, "review": review,
             "delta": state.slot_delta, "q_index": state.questions_seen,
             "episode_id": state.episodes + state.abandoned + 1,
-        })
-        return gave_up
+        }
+        if self.leaves:
+            rec.update(leave_v=v_rest, leave_cost=leave_cost, left=how == "left")
+        state.persistence.append(rec)
+        return how
 
     # Move confidence by how the question went (a give-up is a 0), and count it.
     def _after_question(self, p_hat, outcome):
@@ -134,6 +156,16 @@ class Simulation:
         state.first_passage.append(choice)
         return choice["resolved"] == 1
 
+    # Walked out partway through a set: it is abandoned, the next start decision is cold,
+    # and what was hidden is never told.
+    def _leave(self, achievement):
+        state = self.state
+        state.persistence[-1]["left"] = True
+        state.abandoned += 1
+        state.in_session = False
+        state.total_reward += achievement # the answers they did give still count
+        state.last_set_delta = 0.0 # they walked out; there was no set to judge
+
     # One episode: exactly `stage_amt` slots, one question each.
     def run_episode(self):
         state = self.state
@@ -143,6 +175,7 @@ class Simulation:
         deltas = []
         passed = wrong = review_slots = 0
         achievement = credited = 0.0  # earned this set, and how much of it has landed
+        hidden = []                   # (outcome, believed) for each outcome kept for the score
         state.slot_delta = 0.0        # no slot precedes the first one
         carry = None  # a missed question the learner chose to redo, owed the next slot
 
@@ -158,16 +191,19 @@ class Simulation:
             p_item = success_prob(state, item)
             p_hat = perceived(p_item, state.confidence)
             missed_new = False # a fresh question answered wrong, with the miss shown
-            if self.skips and self._gives_up(item, p_item, review):
+            worth = guess = 0.0
+            shown = True
+            how = self._works(s, item, p_item, review) if self.skips else "answered"
+            if how == "left":
+                self._leave(achievement)
+                return deltas
+            if how == "skipped":
                 state.persistence[-1]["outcome"] = 0
                 self._after_question(p_hat, 0)
-                if s == 0 and cold:
+                if s == 0 and cold and not self.leaves:
                     # Came back, looked at the first question and gave up: that is
                     # leaving. The set is abandoned and the next start decision is cold.
-                    state.persistence[-1]["left"] = True
-                    state.abandoned += 1
-                    state.in_session = False
-                    state.last_set_delta = 0.0 # they walked out; there was no set to judge
+                    self._leave(0.0)
                     return deltas
                 # The slot is spent and earns nothing. A skip is neither right nor
                 # wrong, so the ratings do not move.
@@ -188,24 +224,34 @@ class Simulation:
                     update_ability(state, item, success, review)
                 state.challenge += 1.0 - p_item
 
+                # What a right answer here is worth, on the achievement scale. The
+                # accuracy reward -- the earlier model, kept for comparison -- pays 1 per
+                # right answer, so it is divided back out.
+                full = 1.0 - p_item if self.reward == "achievement" else 1.0 / ACHIEVEMENT_SCALE
+                believed = fb.believed(p_item, state.hidden_offset)
+                guess = believed * full
                 if success:
                     passed += 1
                     achievement += 1.0 - p_item # a hard question right is worth more
+                    worth = full
                 else:
                     wrong += 1
-                    # No redo prompt with feedback hidden: offering one only after a
-                    # miss would reveal the miss.
-                    missed_new = self.feedback and not review and s < last
+                shown = fb.shows(state, self.params, self.feedback, s, success, guess,
+                                 self.target_p, self.guard)
+                if not shown:
+                    hidden.append((int(success), believed))
+                # No redo prompt for a hidden miss: offering one would reveal it.
+                missed_new = not success and shown and not review and s < last
+            if self.skips:
+                state.persistence[-1]["shown"] = shown
 
-            # The outcome lands as reward the moment they are shown it, and at the
-            # end-of-set score if they are not: a miss they see is a slot that paid
-            # nothing against a value that expected something, which is the negative
-            # error. A miss they never see cannot produce one.
-            # `slot_reward` works on the achievement scale, so the accuracy reward --
-            # the earlier model, kept for comparison -- is divided back out of it.
+            # A shown outcome lands as reward the moment they see it: a seen miss is a
+            # slot that paid nothing against a value that expected something, which is the
+            # negative error. A hidden one lands what they believe it earned, and the
+            # end-of-set score pays the rest.
             earned = (achievement if self.reward == "achievement"
                       else passed / ACHIEVEMENT_SCALE)
-            reward, credited = slot_reward(state, earned, credited, self.feedback, s == last)
+            reward, credited = slot_reward(state, worth, shown, guess, earned, credited, s == last)
             delta = self.step_stage(s, reward=reward)
             state.slot_delta = delta
             deltas.append(delta)
@@ -215,6 +261,11 @@ class Simulation:
             if missed_new and self.review_mode == "choice" and self._redoes(s, item):
                 carry = item
 
+        # The score tells them how every hidden question went, and that teaches them what
+        # a hidden outcome means.
+        for outcome, believed in hidden:
+            state.hidden_offset = fb.learn(state.hidden_offset, outcome, believed)
+
         # What the next start decision sees of the set just played.
         n = state.stage_amt
         state.last_review_load = review_slots / n
@@ -222,9 +273,9 @@ class Simulation:
         state.last_episode_passed = passed / n
         state.last_achievement = achievement / n
         state.total_reward += achievement
-        state.last_feedback = int(self.feedback)
-        state.last_seen_miss = wrong / n if self.feedback else 0.0
-        state.last_unseen_miss = 0.0 if self.feedback else wrong / n
+        state.last_feedback = int(not hidden)
+        state.last_seen_miss = (wrong - sum(1 - o for o, _ in hidden)) / n
+        state.last_unseen_miss = sum(1 - o for o, _ in hidden) / n
         # How the set went against what was predicted of it, carried into the decision
         # to start another one.
         state.last_set_delta = float(sum(deltas))

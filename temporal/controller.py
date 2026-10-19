@@ -17,6 +17,7 @@ import pandas as pd
 
 from .inference import fit, passages_to_frame
 from .model import confidence as conf
+from .model import feedback as fb
 from .model.accumulator import DT, T_DUR, snap_cost, snap_value, solution
 from .model.conditions import MAX_REPEAT_ATTEMPTS, REPEAT_COST_SCALE
 from .model.params import PATIENCE, UserParams
@@ -29,9 +30,12 @@ from .model.simulation import Simulation
 class Environment:
     target_p: float = 0.75
     review_rate: float = 0.25
-    feedback: bool = True
+    feedback: str = "on"  # which outcomes are shown during a set (feedback.POLICIES)
     return_skipped: bool = False
     redo_prompts: bool = False  # ask whether to redo each seen miss, as the app can
+
+    def __post_init__(self):
+        object.__setattr__(self, "feedback", fb.policy(self.feedback)) # True/False: on/off
 
     @property
     def review_mode(self):
@@ -39,14 +43,14 @@ class Environment:
 
     def __str__(self):
         return (f"aim {self.target_p:.0%} right, review {self.review_rate:.2f}, "
-                f"feedback {'on' if self.feedback else 'off'}, "
+                f"feedback {self.feedback}, "
                 f"skipped {'come back' if self.return_skipped else 'dropped'}"
                 + (", redo prompts" if self.redo_prompts else ""))
 
 
 TARGETS = (0.9, 0.75, 0.6, 0.45, 0.3, 0.2)
 REVIEW_LEVELS = (0.0, 0.25, 0.5, 1.0)
-FEEDBACK_LEVELS = (True, False)
+FEEDBACK_LEVELS = fb.POLICIES
 SKIPPED_LEVELS = (False, True)
 SCHEDULED = tuple(Environment(t, r, fb, rs)
                   for t in TARGETS for r in REVIEW_LEVELS for fb in FEEDBACK_LEVELS
@@ -190,22 +194,26 @@ def measured(state, ratings):
                                confidence=0.0)
 
 
-# A copy of the person as they are now, logs stripped, placed in `env`.
+# A copy of the person as they are now, logs stripped, placed in `env`. The person in a
+# rollout is the estimate, so the feedback guard plans with exactly them.
 def fork(state, params, env):
     st = copy.deepcopy(dataclasses.replace(state, initiation_passages=[], first_passage=[],
                                            persistence=[]))
     sim = Simulation(params, review_mode=env.review_mode, review_rate=env.review_rate,
                      target_p=env.target_p, feedback=env.feedback,
-                     skips=True, return_skipped=env.return_skipped)
+                     skips=True, return_skipped=env.return_skipped, leaves=True)
+    sim.guard = (params.f, params.k, params.patience)
     sim.state = st
     return sim
 
 
-# Put a running simulation into `env`.
-def apply(sim, env):
+# Put a running simulation into `env`, with the feedback guard on the estimate `est`.
+def apply(sim, env, est=None):
     sim.target_p, sim.review_rate = env.target_p, env.review_rate
     sim.feedback, sim.return_skipped = env.feedback, env.return_skipped
     sim.review_mode = env.review_mode
+    if est is not None:
+        sim.guard = (est.f, est.k, est.patience)
 
 
 # Total reward earned over `horizon` start decisions in `env`.
@@ -503,7 +511,8 @@ def plan_in_worker(controller, state, params):
 # A simulated person, measured the way the interface measures a human: the controller
 # only ever sees the Elo rating built from their answers, never their true difficulty.
 def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
-        reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True):
+        reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True, leaves=True,
+        guard=None):
     random.seed(seed)
     np.random.seed(seed)
     start = controller.env if controller else env
@@ -511,7 +520,9 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
     sim = Simulation(params, reentry_cost=reentry_cost, review_rate=start.review_rate,
                      review_mode=start.review_mode, target_p=start.target_p,
                      feedback=start.feedback, ratings=ratings, skips=skips,
-                     return_skipped=start.return_skipped)
+                     return_skipped=start.return_skipped, leaves=leaves)
+    if guard is not None:
+        sim.guard = guard  # (f, k, patience) for the feedback guard, without a controller
     st = sim.state
     truth = type_diffs if type_diffs is not None else synthetic_type_diffs(spread)
     st.type_diffs = np.array(truth, dtype=float) # hidden from the controller
@@ -526,7 +537,7 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
             sim.run_episode()
         if controller is not None and controller.due(st):
             controller.plan(measured(st, ratings), params)
-            apply(sim, controller.env)
+            apply(sim, controller.env, controller.est)
     return sim
 
 

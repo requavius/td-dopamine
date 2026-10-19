@@ -62,6 +62,11 @@ class ModelState:
     last_set_delta: float = 0.0
 
     confidence: float = 0.0    # logit offset on their believed chance (model/confidence.py)
+    # What a hidden outcome tells them (model/feedback.py): a logit offset on their chance
+    # of having got it right, learned from the hidden outcomes the score has told them.
+    hidden_offset: float = 0.0
+    miss_hide_rate: float = 0.0  # guard+cover: the share of misses kept back lately
+    cover_debt: float = 0.0      # guard+cover: rights owed a hiding, to keep pace with that share
     questions_seen: int = 0    # questions worked on so far, to place each record in sequence
     challenge: float = 0.0     # running total of (1 - p) over every question attempted
     total_reward: float = 0.0  # running total of (1 - p) over right answers

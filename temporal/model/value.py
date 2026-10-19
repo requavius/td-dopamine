@@ -33,13 +33,14 @@ def value_of_stage(state: ModelState, p: UserParams, s, reward=0.0):
     return delta
 
 
-# What arrives at a slot, on the achievement scale, given the set's achievement so far
-# and how much of it has already been paid. With feedback shown, a question's worth lands
-# the moment its outcome does; with it hidden nothing lands until the end-of-set score,
-# which pays the set in one lump. A set totals the same either way -- feedback moves when
-# the signal arrives, not how much, and that timing is the whole of its effect.
+# What arrives at a slot, on the achievement scale. `worth` is what this question earned;
+# `guess` is what they credit it with if its outcome is hidden (feedback.believed times
+# what a right answer is worth); `achievement` is the set's total so far and `credited`
+# how much of it has been paid. A shown outcome lands its worth; a hidden one lands the
+# guess, and the end-of-set score pays whatever is left, so a set totals the same either
+# way -- feedback moves when the signal arrives, and how wrong the guess was.
 # Returns (reward, achievement now credited).
-def slot_reward(state: ModelState, achievement: float, credited: float,
-                feedback: bool, last: bool) -> tuple:
-    due = achievement if (feedback or last) else credited
+def slot_reward(state: ModelState, worth: float, shown: bool, guess: float,
+                achievement: float, credited: float, last: bool) -> tuple:
+    due = achievement if last else credited + (worth if shown else guess)
     return ACHIEVEMENT_SCALE * (due - credited) / state.stage_amt, due

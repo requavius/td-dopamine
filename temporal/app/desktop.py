@@ -67,10 +67,16 @@ class DesktopApp(Session):
         for text, var in [
             ("show stage count", self.v_show_count),
             ("show score so far", self.v_show_score),
-            ("feedback (from next set)", self.v_feedback),
             ("offer repeat-or-continue", self.v_show_choice),
         ]:
             ttk.Checkbutton(right, text=text, variable=var).pack(anchor="w", pady=1)
+
+        ttk.Label(right, text="feedback (from next set):", font=SMALL).pack(anchor="w", pady=(6, 0))
+        for value, text in (("on", "every outcome shown"), ("off", "kept for the score"),
+                            ("guard", "misses kept back when risky"),
+                            ("guard+cover", "that, and rights as often")):
+            ttk.Radiobutton(right, text=text, value=value,
+                            variable=self.v_feedback).pack(anchor="w")
 
         ttk.Label(right, text="when not offered, it:", font=SMALL).pack(anchor="w", pady=(6, 0))
         forced = ttk.Frame(right)
@@ -141,9 +147,12 @@ class DesktopApp(Session):
         entry.focus_set()
         entry.bind("<Return>", lambda e: self.on_answer(entry.get()))
         entry.bind("<Escape>", lambda e: self.on_skip())
-        ttk.Label(self.left, text="type the answer and press enter -- or give up on it",
+        ttk.Label(self.left, text="type the answer and press enter -- or give up on it, or stop",
                   font=SMALL).grid(row=3, column=0, pady=12)
-        ttk.Button(self.left, text="skip  (esc)", command=self.on_skip).grid(row=4, column=0)
+        buttons = ttk.Frame(self.left)
+        buttons.grid(row=4, column=0)
+        ttk.Button(buttons, text="skip  (esc)", command=self.on_skip).pack(side="left", padx=8)
+        ttk.Button(buttons, text="I'm done", command=self.on_leave).pack(side="left", padx=8)
         self.refresh_stats()
 
     def flash(self, text, then):
