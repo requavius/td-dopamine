@@ -1,5 +1,6 @@
 """Data-generating pipelines and parameter recovery sweeps."""
 import itertools
+import random
 from pathlib import Path
 
 import numpy as np
@@ -120,12 +121,21 @@ def _probed_person(f_true, k_true, n_decisions, seed):
                       n_decisions=n_decisions, seed=seed)
 
 
+# Each dataset from its own seed, so a sweep run again reproduces it point for point.
+def seed_point(a, b, rep):
+    seed = int(a * 1000) * 100_000 + int(b * 1000) * 10 + rep
+    random.seed(seed)
+    np.random.seed(seed % 2**32)
+    return seed
+
+
 def _sweep(grid, reps, generate, out_path, title):
     records = []
     total = len(grid) * reps
     for i, ((f_true, k_true), rep) in enumerate(
         itertools.product(grid, range(reps)), start=1
     ):
+        seed_point(f_true, k_true, rep)
         df = generate(f_true, k_true)
         assert_row_floor(df)
         f_hat, k_hat = fit(df)
@@ -222,6 +232,7 @@ def recovery_t0(grid=T0_GRID, f_true=0.8, k_true=0.8, reps=3, n_decisions=1200):
     records = []
     total = len(grid) * reps
     for i, (t0_true, rep) in enumerate(itertools.product(grid, range(reps)), start=1):
+        seed_point(t0_true, 0.0, rep)
         df = collect_single(f_true, k_true, n_decisions, t0=t0_true)
         f_pin, k_pin = fit(df)
         f_free, k_free, t0_hat = fit(df, t0=True)

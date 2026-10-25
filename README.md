@@ -18,6 +18,131 @@ from a real person has been validated yet.
 
 ---
 
+## Running the app
+
+```bash
+uv sync
+```
+
+Run every command from the repo root. `uv run` uses the project's environment; inside an
+activated `.venv`, plain `python` works too.
+
+```bash
+uv run python -m temporal.app.desktop                                 # in a window; data in data/
+TEMPORAL_RESEARCHERS=you@example.com uv run python -m temporal.app.web # in a browser at http://127.0.0.1:8000
+TEMPORAL_PANEL=1 uv run python -m temporal.app.web                    # as a guest, with the dev panel
+```
+
+The web app keeps only researchers' records until `TEMPORAL_COLLECT=1`; see "On a website".
+With the dev panel open, "show the accumulator next to the task" draws the model's live
+prediction beside each start and redo decision.
+
+---
+
+## Reproducing every result
+
+Every number in this README and every figure in the paper comes from code in this repo.
+Simulations save their results to `results/`, which is committed, and the figures are
+drawn from those files. Redrawing every figure takes a few minutes, and re-printing a
+table from the saved results (`--replot`) takes seconds. Re-running a simulation from
+scratch takes minutes to hours and gives the same results, because every run is seeded.
+Fits may differ slightly because of how pyddm's optimizer works.
+
+### Setup
+
+Install as in "Running the app", then check the install:
+
+```bash
+uv run pytest
+```
+
+### Redraw the paper's figures
+
+```bash
+uv run python -m paper              # every figure, into paper/figures/ (PNG, and PDF for most)
+uv run python -m paper fig7 fig8    # only some
+uv run python -m paper explainers   # the explanatory figures, into paper/figures/explainers/
+```
+
+| figure | shows | drawn from | code |
+|---|---|---|---|
+| 1 | the model: the loop, the decision, what makes a task worth starting | nothing (schematic + simulated paths) | `paper/model.py` |
+| 2 | drift planes: why two decisions with different value/cost mixes pin down `f` and `k` | nothing (exact drifts) | `paper/explainers.py` |
+| 3 | patience on a recorded session | a `decisions.jsonl` (see below) | `paper/explainers.py` |
+| 4 | recovery from one person | `results/recovery_sweep/` | `paper/model.py` |
+| 5 | bias in `f`, `k` and `f / k` when the person's γ, learning rate, noise or bound differ from the fit's, from start decisions only and with redo prompts | `results/misspecification/` | `paper/misspecification.py` |
+| 6 | shortcuts in the fit, one at a time | `results/recovery_sweep/`, `results/pipelines/`, `results/precision/` | `paper/shortcuts.py` |
+| 7 | which difficulty keeps people engaged, and what feedback does | `results/task_choice/` | `paper/task.py` |
+| 8 | the controllers over time: `k` error and the spread of cost each collects | `results/controllers/` | `paper/controllers.py` |
+| S2 | timed-out trials kept vs dropped | `results/recovery_sweep/` | `paper/model.py` |
+| S3 | every combination of three fit choices | `results/fit_factorial/` | `paper/shortcuts.py` |
+| S4 | reward by difficulty, and the one-person feedback test | `results/task_choice/` | `paper/task.py` |
+| S5 | the controllers over time, adding `f` error and engagement | `results/controllers/` | `paper/controllers.py` |
+| identifiability | why one decision cannot separate `f` and `k`, in 2D; the 3D version is Figure 2 | nothing (exact drifts) | `paper/identifiability.py` |
+
+### Re-print or re-run each result
+
+Each `python -m experiments.<name>` runs its simulation, saves `results/<name>/`, and
+prints the README's table for it. Add `--replot` to print the table from the saved
+results without running. Runs use all but one core. Most take minutes to an hour; the
+controller comparison, the misspecification sweep and the single and coupled recovery
+sweeps take hours.
+
+| README result | command | results |
+|---|---|---|
+| Which difficulty and whether to show feedback (the three tables) | `python -m experiments.task_choice` | `results/task_choice/` |
+| Feedback across people, by difficulty, and the two ends of the engagement curve | `python -m experiments.feedback_grid` | `results/feedback_grid/` |
+| Lockout | `python -m experiments.lockout` | `results/lockout/` |
+| It found the redo prompts on its own; Measuring costs no detectable reward; Over time; Block by block | `python -m experiments.controllers` | `results/controllers/` |
+| Recovery from one person; Censored trials are data | `python -m experiments.recovery_sweep` | `results/recovery_sweep/` |
+| The recovery pipelines (single, coupled, uncoupled) | `python -m temporal recovery --mode MODE --reps R --out results/pipelines` with R = 3, 3, 5 | `results/pipelines/MODE.csv` |
+| Skips do not help estimate `f` and `k` | `python -m temporal recovery --mode persistence --reps 3 --out results/pipelines` | `results/pipelines/persistence.csv` |
+| Patience can be recovered | `python -m temporal recovery --mode patience --reps 3 --out results/pipelines` | `results/pipelines/patience.csv` |
+| Non-decision time (the T0 table) | `python -m temporal recovery --mode t0 --reps 3 --out results/pipelines` | `results/pipelines/t0.csv` |
+| What each part of the fit contributes | `python -m experiments.fit_factorial` | `results/fit_factorial/` |
+| How value and cost decide what can be measured (the precision table) | `python -m experiments.precision` | `results/precision/` |
+| Prediction error is a large part of the variation in value; the carry table | `python -m experiments.value_variation` | `results/value_variation/` |
+| The person may not share the model's constants | `python -m experiments.misspecification` | `results/misspecification/` |
+| The coupled recovery plot | `python -m temporal recovery --mode coupled --reps 3` | `assets/initiation_recovery_coupled.png` |
+
+The `temporal recovery` sweeps print their tables as they finish; they have no `--replot`,
+but their saved CSVs are what Figure 6 reads. To re-run everything, run every command in
+the table.
+
+### Figures and checks that read a recorded session
+
+Figure 3 and the "joint fit pull" explainer are drawn from a session record, the
+`decisions.jsonl` the app writes. No record is in the repo (`data/` is gitignored), so
+without one `python -m paper` skips them. Point it at a record with
+`TEMPORAL_RECORD=path/to/decisions.jsonl python -m paper fig3 explainers`, and check a
+record's decision times against the deadline with
+`python -m temporal audit --path path/to/decisions.jsonl`.
+
+### Other commands
+
+```bash
+python -m temporal.controller --values 0.8,0.8   # one simulated person: a fixed setting vs both controllers
+python -m temporal run --values 0.8,0.8          # one simulated learner on the single-diff task
+python -m temporal recovery --mode reseeded      # recovery from four learners across the learning curve
+```
+
+For `run`: `--values` takes `f,k`; `--cost` picks the cold-start profile; `--review-mode`
+and `--review-rate` set review; `--diff-spread` sets per-stage difficulty spread;
+`--decisions` caps the number of start decisions (default 200). For `recovery`: `--mode`
+picks the pipeline, `--reps` sets repetitions per grid point (default 5) and `--out` saves
+each sweep's results. For `audit`: `--path` points at a `decisions.jsonl` (default
+`data/decisions.jsonl`). For `temporal.controller`: `--values`, `--decisions` (default
+300), `--seed`. Bare `python -m temporal` is shorthand for `python -m temporal run`.
+
+### Reporting conventions
+
+`f` is identified only up to the discount factor γ, `ACHIEVEMENT_SCALE` and the value
+bootstrap. Every result here was measured with γ = 0.9, `ACHIEVEMENT_SCALE = 4`, the
+continuing bootstrap and `T_DUR = 7.0`, under the current model (V3 in `RETIRED.md`).
+Numbers are not comparable across model versions; earlier ones are in `RETIRED.md`.
+
+---
+
 ## Main equation
 
 Every time a person finishes a set, they face a small decision: start the next
@@ -67,17 +192,13 @@ on that question.
 
 - **Patience is per person.** Model time becomes seconds through `patience`, the
   seconds per unit of model time; someone who skips at a glance has a small one. It
-  was a fixed 10 s at first. The first real player's skips took 1.5 to 4.2 s, which at
-  10 s are 1-in-10,000 to 1-in-10,000,000 events. Their fitted patience is 1.7 s
-  (−log L 73.9, against 102.2 at 10 s; 65 questions, 14 given up), with `f = k = 0.8`,
-  the controller's prior, since 26 decisions are under its 40-row floor.
+  was a fixed 10 s at first, which makes skips of a few seconds all but impossible.
 - **Answered questions count too.** An answer after 25 s says "kept going at least
   25 s", so it enters the likelihood through the survival function, as a right-censored
   time to give up. Every question is an observation, skipped or not.
 - **2% of questions are lapses**: given up on, or kept at, for reasons the model does
-  not describe, at a uniform time within 60 s. One odd skip (79 + 85, an
-  83% chance for that player, dropped after 2.2 s) then cannot decide the estimate
-  on its own.
+  not describe, at a uniform time within 60 s. One odd skip, such as dropping an easy
+  question after two seconds, then cannot decide the estimate on its own.
 - **Leaving from the first question after coming back** is giving up on it too. In
   the simulator, giving up on the first question of a set started cold abandons the
   set, and the next start decision is cold again.
@@ -137,7 +258,7 @@ the current setting with long rollouts on fresh seeds (16 × 300), and switches 
 one earning the most **total reward** only if that re-test beats the current setting
 by more than twice its standard error. Short rollouts alone were too noisy to act on
 (the V1 case that showed it is in `RETIRED.md`). The interface plans in a separate
-process, so play continues meanwhile; one `InfoController` plan takes about 4.6 s (see
+process, so play continues meanwhile; one `InfoController` plan takes about 1.5 s (see
 "Code layout, tests and speed").
 
 About 15% of updates pick a setting at random instead. Those probes are independent of
@@ -159,11 +280,11 @@ only engagement rule is the safety floor, which counts sets started.
 on, one setting held for each run of 300 start decisions, review 0.25, skipped questions
 dropped, no controller. The target is the predicted chance of a right answer each
 question is aimed at; it is a prediction from the ratings, and the chance actually
-achieved was not recorded. γ = 0.9, `ACHIEVEMENT_SCALE = 4`, continuing bootstrap, `T_DUR = 7.0`.
-Claims fixed before the run (paired on seed): a peak is determined if it
-beats both neighbouring targets beyond 2 SE; the feedback crossover is established if
-shown − hidden is positive beyond 2 SE at one target and negative beyond 2 SE at a
-harder one.
+achieved was not recorded. γ = 0.9, `ACHIEVEMENT_SCALE = 4`, continuing bootstrap,
+`T_DUR = 7.0`; run with `python -m experiments.task_choice`. Claims fixed before the run
+(paired on seed): a peak is determined if it beats both neighbouring targets beyond 2 SE;
+the feedback crossover is established if shown − hidden is positive beyond 2 SE at one
+target and negative beyond 2 SE at a harder one.
 
 Engagement, P(start next set), by target, feedback shown, 16 seeds (descriptive; no
 claim was fixed in advance for it):
@@ -202,7 +323,7 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
 | target | 90% | 75% | 60% | 45% | 30% | 20% |
 |---|---|---|---|---|---|---|
 | P(start) | **+0.068 ± 0.010** | **+0.080 ± 0.010** | **+0.042 ± 0.006** | **+0.072 ± 0.014** | **+0.070 ± 0.023** | **+0.051 ± 0.021** |
-| total reward | **+2.9 ± 0.9** | **+5.6 ± 1.5** | −1.1 ± 1.5 | +3.5 ± 2.6 | +8.4 ± 4.8 | **+8.1 ± 3.7** |
+| total reward | **+2.9 ± 0.9** | **+5.6 ± 1.5** | −1.1 ± 1.4 | +3.5 ± 2.6 | +8.4 ± 4.8 | **+8.1 ± 3.7** |
 
 - **Showing feedback raises engagement at every target**, by 0.04 to 0.08, each beyond
   2 SE (2.4 to 7.9 SE). A seen right answer lands as reward at once instead of being
@@ -212,18 +333,19 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
   five times more than at 90%. The 20% result (2.2 SE) is one of six tests and should not
   carry weight alone.
 - **Across people (2026-10-15).** The 16 people of the 4×4 grid, six targets, shown and
-  hidden, 16 paired seeds each. Claim fixed before the run: showing feedback never lowers
+  hidden, 16 paired seeds each (`python -m experiments.feedback_grid`, which also prints
+  the next two bullets). Claim fixed before the run: showing feedback never lowers
   engagement if at most 4 of the 96 person × target cells fall below zero beyond 2 SE and
   none beyond 3 SE. **It holds: 0 cells below zero beyond 2 SE**, 87 of 96 positive. The
-  per-person claim that it helps beyond 2 SE at every target held for 1 of 16; 16 seeds
-  per cell are too few. Pooled over targets (descriptive), it raised P(start) beyond 2 SE
+  per-person claim that it helps beyond 2 SE at every target where the person starts at
+  least 10% of the time held for 1 of 16; 16 seeds per cell are too few. Pooled over targets (descriptive), it raised P(start) beyond 2 SE
   for 13 of 16 people, by 0.015 to 0.081; the other three have `k = 1.5` and barely start.
 - **By difficulty, over all 16 people** (256 paired runs per target): P(start) shown −
   hidden was +0.031, +0.034, +0.027, +0.039, +0.050, +0.044 at 90, 75, 60, 45, 30, 20%,
   each beyond 2 SE. Total reward shown − hidden was +1.0 ± 0.5, +1.4 ± 1.0, −0.2 ± 1.2,
   +2.6 ± 1.9, **+7.7 ± 2.1**, **+8.1 ± 1.8**: with feedback shown, people earn more at
   hard targets, where the one-person run above could not tell.
-- **Lockout (2026-10-15).** Lockout is a run in which the person almost never starts
+- **Lockout (2026-10-15, `python -m experiments.lockout`).** Lockout is a run in which the person almost never starts
   again (start rate below 0.10 over 300 decisions, defined before the run). Four
   effort-averse people (f, k = 0.6/1.0, 0.6/1.2, 1.0/1.2, 1.0/1.5), targets 75, 60 and 45%,
   64 paired seeds each. Claims fixed before the run: pooled, lockout is more common with
@@ -283,33 +405,33 @@ move value and cost in directions the data has not covered yet.
 - **It found the redo prompts on its own.** The redo decision is where cost varies most
   (`0.15 · min(1/p, 8)`, about 4× across difficulties), and the controller chose a
   redo-prompt setting on 93% of its updates. Random probing over the same 96 settings
-  picked one 11% of the time and saw about 5 redo prompts per person.
+  picked one 11% of the time and saw about 5 redo prompts per person
+  (`python -m experiments.controllers`).
 
 **Measuring costs no detectable reward (2026-10-11).** Four ways of choosing settings were
 run on the same 32 simulated people: a 4 × 4 grid of f and k in {0.2, 0.6, 1.0, 1.5}, 2
 seeds each. Each run had 300 start decisions, the question-type task, and skips on, and
 the controllers never saw the true f and k. Settings: γ = 0.9, `ACHIEVEMENT_SCALE = 4`,
-continuing bootstrap, `T_DUR = 7.0`. Pass conditions were fixed before the run, in
-`controller_compare.py`, and the measuring rows are info_design2's `bayes_redo` rows. The
-port check reproduced those rows' simulated decisions, reward and redo prompts exactly;
-the fits matched to within 1e-4.
+continuing bootstrap, `T_DUR = 7.0`. Pass conditions were fixed before the run.
+`python -m experiments.controllers` prints this table and the three after it. It fits
+every arm at 100, 200 and 300 decisions, and its fits at 300 match the original run's to
+within 0.01.
 
 | how settings were chosen | f RMSE | k RMSE | total reward | P(start next set) | redo settings chosen |
 |---|---|---|---|---|---|
 | fixed default | 0.093 | 0.310 | 60.0 | 0.64 | 0% |
-| for reward, 84 scheduled-review settings (the app's controller until 2026-10-11) | 0.054 | 0.293 | 147.0 | 0.76 | 0% |
+| for reward, 84 scheduled-review settings (the app's controller until 2026-10-11) | 0.054 | 0.294 | 147.0 | 0.76 | 0% |
 | for reward, all 96 settings | 0.056 | 0.223 | 142.7 | 0.75 | 35% |
 | for information, all 96 (`InfoController`) | **0.038** | **0.046** | **152.4** | 0.75 | 93% |
 
 **Over time (2026-10-15).** The same people and seeds, fitted at 100, 200 and 300 start
-decisions (the reward and fixed arms re-run with checkpoints; all 96 reproduced the
-original simulations exactly, with fits within optimizer jitter of 0.01). The spread of
+decisions. The spread of
 cost is the standard deviation of cost across the decisions collected so far.
 
 | how settings were chosen | k RMSE at 100 / 200 / 300 | f RMSE at 100 / 200 / 300 | sd of cost at 300 |
 |---|---|---|---|
 | fixed default | 0.575 / 0.622 / 0.310 | 0.152 / 0.141 / 0.093 | 0.134 |
-| random every 25 decisions | 0.309 / 0.247 / 0.126 | 0.103 / 0.067 / 0.071 | 0.171 |
+| random every 25 decisions, 84 settings | 0.309 / 0.247 / 0.126 | 0.103 / 0.067 / 0.071 | 0.171 |
 | for reward, 84 settings | 0.471 / 0.391 / 0.294 | 0.079 / 0.066 / 0.054 | 0.112 |
 | for reward, 96 settings | 0.358 / 0.346 / 0.223 | 0.079 / 0.077 / 0.056 | 0.126 |
 | for information (`InfoController`) | **0.090 / 0.059 / 0.046** | **0.075 / 0.056 / 0.038** | **0.272** |
@@ -319,15 +441,14 @@ Choosing for information measures `k` better at 100 decisions than every other w
 planning measures `k` worse than random settings at every checkpoint.
 
 **What measuring costs, block by block (2026-10-15).** The same 160 runs (5 arms × 32
-people), re-run with reward and start decisions recorded at 100, 200 and 300 start
-decisions (`private/experiments/controller_blocks.py`). All 160 reproduced the saved total
-reward exactly. No claims were fixed before this run, so these are descriptive.
+people), with reward and start decisions recorded at 100, 200 and 300 start decisions. No
+claims were fixed before this run, so these are descriptive.
 
-| how settings were chosen | reward 1–100 / 101–200 / 201–300 | P(start) 1–100 / 101–200 / 201–300 |
+| how settings were chosen | reward 1-100 / 101-200 / 201-300 | P(start) 1-100 / 101-200 / 201-300 |
 |---|---|---|
 | fixed default | 34.0 / 16.8 / 9.2 | 0.70 / 0.67 / 0.56 |
-| random every 25 decisions | 41.2 / 15.0 / 7.5 | 0.60 / 0.60 / 0.44 |
-| for reward, 84 settings | 62.6 / 48.8 / 35.6 | 0.74 / 0.79 / 0.76 |
+| random every 25 decisions, 84 settings | 41.2 / 15.0 / 7.5 | 0.60 / 0.60 / 0.44 |
+| for reward, 84 settings | 62.6 / 48.8 / 35.6 | 0.73 / 0.79 / 0.76 |
 | for reward, 96 settings | 64.0 / 48.4 / 30.3 | 0.74 / 0.79 / 0.71 |
 | for information (`InfoController`) | 49.0 / 48.6 / 54.9 | 0.70 / 0.76 / 0.81 |
 
@@ -335,9 +456,9 @@ Paired differences, information − reward planning (84 / 96 settings):
 
 - **First 100 decisions:** reward −13.6 ± 3.4 / −15.1 ± 3.2, both beyond 2 SE. P(start)
   −0.040 ± 0.024 / −0.049 ± 0.024: the first is undetermined, the second just past 2 SE.
-- **101–200:** reward −0.2 ± 4.7 / +0.2 ± 4.4; P(start) −0.032 ± 0.018 / −0.038 ± 0.014.
+- **101-200:** reward −0.2 ± 4.7 / +0.2 ± 4.4; P(start) −0.032 ± 0.018 / −0.038 ± 0.014.
   Reward is undetermined; the P(start) gap against the 96-setting controller is 2.7 SE.
-- **201–300:** reward +19.3 ± 6.3 / +24.6 ± 6.5, both beyond 2 SE. P(start) +0.049 ±
+- **201-300:** reward +19.3 ± 6.3 / +24.6 ± 6.5, both beyond 2 SE. P(start) +0.049 ±
   0.031 / +0.102 ± 0.037: the first is undetermined, the second 2.8 SE.
 
 So measuring does cost something, early: about 14 reward and 4 to 5 points of P(start)
@@ -349,24 +470,25 @@ Paired differences over the 32 people (same people and seeds); a difference coun
 beyond 2 SE:
 
 - **P1 passes.** Squared error in k, measuring − reward planning (96 settings), was
-  −0.0477 ± 0.0232. That is just past 2 SE (0.0464), so it is a narrow pass. For f it was
+  −0.0476 ± 0.0231. That is just past 2 SE (0.0462), so it is a narrow pass. For f it was
   −0.0017 ± 0.0013, undetermined, so f is not worse. Against the app's previous controller
-  the k gain is clearer: −0.0837 ± 0.0322 (2.6 SE).
+  the k gain is clearer: −0.0841 ± 0.0327 (2.6 SE).
 - **P2 passes.** Reward, measuring − fixed default: +92.4 ± 9.1.
 - **Over the whole run, measuring cost no detectable reward.** Measuring − reward planning:
   +9.7 ± 10.2, and measuring − previous controller: +5.5 ± 10.1. Both are undetermined, and
   both point estimates favor measuring. Block by block it does cost reward early and
   repay it late (above).
 - **Fixing the reward controller's rollouts changed little.** Reward, 96 − 84 settings:
-  −4.3 ± 3.7. k squared error: −0.0360 ± 0.0395. Both are undetermined. Given redo
+  −4.3 ± 3.7. k squared error: −0.0365 ± 0.0399. Both are undetermined. Given redo
   prompts it used them on 35% of updates (28 redo decisions per person, against 338 for
   measuring).
 - **Reward planning leaves k poorly identified.** At 0.22 to 0.29 RMSE, k is barely
   better than with the fixed default (0.31). k came out below 0.05 for 3 of 32 people
   under the previous controller and 1 under the 96-setting one, all with true k = 0.2.
   None did under measuring. That fits the reason the measuring controller exists: reward
-  planning settles on a setting, so cost stops varying. This run did not log cost spread,
-  so it does not test that reason directly.
+  planning settles on a setting, so cost stops varying. The spread of cost in "Over time"
+  bears it out: 0.11 to 0.13 under reward planning at 300 decisions, against 0.27 under
+  measuring.
 
 ---
 
@@ -409,15 +531,14 @@ then serves a type whose predicted chance is nearest the current **target chance
 get rated). Hard is relative to the person by construction.
 
 **Only a question's first showing rates it.** A review or redo of the same question is
-not a fresh sample of its type. Before this rule, a single question (34 × 8, shown 8
-times) was all the evidence behind one player's 23% chance on every 2-digit × 1-digit
-multiplication.
+not a fresh sample of its type. Without this rule, one question shown many times could
+be all the evidence behind a person's chance on its whole type.
 
 **Typos are not misses** (interface). A miss put right on the redo within 2 s
 (`SLIP_SECONDS`) is treated as a slip: the ratings are restored to before the miss and
 the question is rated as answered right, it is not owed, and it does not count as a
-miss. The first player's log had six wrong-then-right redos;
-two were fixed in under a second (11 + 20 → 21, then 31 in 0.4 s).
+miss. A wrong answer fixed in under a second is a slip of the keyboard, not a gap in
+skill.
 
 The recovery pipelines (`python -m temporal recovery`) still use the older single-`diff` task (with
 optional per-stage `diff_spread`); question types are used by `controller.py`'s
@@ -433,8 +554,8 @@ reward = ACHIEVEMENT_SCALE · Σ_right (1 − p) / stage_amt        ACHIEVEMENT_
 A trivial right answer earns almost nothing, so a set of easy wins is worth little
 and a learner can stop out of boredom. Under the previous reward (fraction right)
 the model could not represent that: it believed the easiest setting was always the
-most rewarding, which is why a human player given only single-digit questions was
-never offered anything harder (the V1 comparison is in `RETIRED.md`).
+most rewarding, so a person served only single-digit questions was never offered
+anything harder (the V1 comparison is in `RETIRED.md`).
 
 The scale is a calibration. The expected reward per question,
 `p(1 − p)`, peaks at 0.25; scale 4 makes that peak 1.0, the value of a perfect set
@@ -462,9 +583,9 @@ again, it stays skipped.
 **Questions that come back** (interface). A question is never shown twice in one set,
 except as a redo the person chose. One that comes back and is missed or skipped 3 times
 (`RETIRE_AFTER`; redos do not count) is retired: it stops coming back, and a `retired`
-event is logged. Before this, one player was shown 853 − 163 twice in a row and skipped
-it both times in 1.5 s. The simulator's owed items are question types rather than
-individual questions, so neither rule applies there.
+event is logged. Without it, a question someone keeps skipping can come back again and
+again. The simulator's owed items are question types rather than individual questions,
+so neither rule applies there.
 
 When the learner is the one deciding redos (`review_mode = "choice"`), effort
 aversion produces a spiral nothing stipulates: high `k` declines the redos, so less
@@ -591,7 +712,7 @@ They are two observations of the same person, and their draws stack into one fit
   times `1 + review load` of the last set.
 - Noise, boundary and deadline are pinned at `SIGMA = 0.7`, `BOUND = 1.5`,
   `T_DUR = 7.0` so they cannot absorb variance that belongs to the parameters. The
-  deadline was 3.0 s until 2026-09-13; see "The deadline was discarding human choices".
+  deadline was 3.0 s until 2026-09-13; see "The deadline must sit past human decision times".
 
 **The repeat-or-continue node** fires after a missed new question, when the learner
 decides redos and feedback is shown. It fires *after* the miss has landed as reward,
@@ -608,8 +729,7 @@ this node carries is `k`.
 one-boundary process with no deadline. Seconds become model time through the person's
 `patience` (default 10 s), estimated per person. Simulated people also need a time
 to solve each question; it is lognormal with a median of `4 s / p^0.7`: about 4 s for
-a sure thing and 20 s at a 10% chance, close to the 1 to 30 s one human took in
-`data/`. Real people simply take the time they take.
+a sure thing and 20 s at a 10% chance. Real people simply take the time they take.
 
 ### 4. Inference
 
@@ -659,12 +779,7 @@ question that was on screen and no time.
 retirement rules apply to the whole record, not only to new answers. A state saved
 under older rules gets its ratings and failed-return counts rebuilt from
 `decisions.jsonl` on the next launch, logged as `rebuilt`, and questions that have
-already failed 3 returns are retired. The record itself is never rewritten. On the
-first player's data:
-- their chance on 2-digit × 1-digit multiplication went from 37% to 55%, now rated on
-  1 answer instead of the 8 showings of 34 × 8;
-- measured ability went from 1.26 to 1.47;
-- 853 − 163 was retired.
+already failed 3 returns are retired. The record itself is never rewritten.
 
 Replaying a record written under the current rules reproduces the ratings kept live
 exactly, so the rebuild is the same rule applied after the fact, not an approximation.
@@ -699,15 +814,15 @@ apply from the next set.
 Three properties of human data follow from this flow, and all three matter for inference:
 
 - **Every stop is a session end.** Each session contributes at most one "no" at the
-  start prompt, and those are what identify `k` there. Many sessions are needed. In
-  practice people stop by closing the app: the first player's four sessions ended with
-  one "I'm done", two window closes, and one exit nothing logged. Those exits are why
-  leaving is now recorded with what was on screen.
+  start prompt, and those are what identify `k` there. Many sessions are needed. People
+  also stop by closing the app without choosing, which is why leaving is recorded with
+  what was on screen.
 - **The fit never sees a cold start from a human.** Opening the app is the cold
   decision, and its "reaction time" is hours. Every start decision the fit sees is
   made mid-session, at warm cost. For humans, most of what identifies `k` comes from
-  the redo prompts, whose cost does vary with how hard the missed question is, and
-  now also from time spent on questions.
+  the redo prompts, whose cost does vary with how hard the missed question is. Time
+  spent on questions sets patience only; it does not enter the `f` and `k` fit (see
+  "Skips do not help estimate `f` and `k`").
 - **Every question is a persistence observation.** A set gives one start decision but
   four or more questions, each with a time and whether it was skipped. Earlier
   sessions' answers are used too: they were logged with a time and a predicted
@@ -756,8 +871,16 @@ is enough to keep one person's sessions together, but it is not a login.
   A page left silent for 2 hours is closed as well. A server that dies without closing
   is caught on the next launch, as `unlogged`, the same as a crash on the desktop.
 - **Plans and fits run in one process pool** shared by all players.
-- **Dev stuff** (settings, behind the scenes, fit, export) is shown to researchers
-  only, or to everyone with `TEMPORAL_PANEL=1`.
+- **Dev stuff** (settings, behind the scenes, fit, export, and the switch for the live
+  accumulator) is shown to researchers only, or to everyone with `TEMPORAL_PANEL=1`.
+- **The live accumulator** (`app/live.py`) shows what the model predicts for the start or
+  redo decision on screen. On the web it sits beside the task once its box is ticked in
+  dev stuff; on the desktop it opens from the "live model view" button. It draws the
+  bounds, the mean drift `f·value − k·cost`, the predicted RT densities at each bound,
+  and sample paths that run in real time on the person's clock, then marks their actual
+  choice and RT. It uses the controller's estimate, or the prior `(0.8, 0.8)` until there
+  is one. Its paths come from their own random generator rather than the global ones, so
+  seeded sessions are unchanged, and nothing it shows is recorded.
 
 Run it as **one worker process**: live sessions are held in memory.
 
@@ -775,70 +898,6 @@ fly ssh sftp get /data -r ./data-from-fly   # download the records
 
 Anywhere else, build the `Dockerfile`, mount a persistent volume at `/data`, and
 set the same environment variables. It listens on `$PORT` (default 8000).
-
----
-
-## Running it
-
-```bash
-uv sync
-```
-
-```bash
-# Play it yourself. Data is kept in data/ between sessions.
-python -m temporal.app.desktop
-
-# The same task in a browser, at http://127.0.0.1:8000. Only researchers' data is kept,
-# in data/web/<email>/, until TEMPORAL_COLLECT=1.
-TEMPORAL_RESEARCHERS=you@example.com python -m temporal.app.web
-
-# One simulated person: a fixed setting vs the reward and measuring controllers
-python -m temporal.controller --values 0.8,0.8
-
-# One simulated learner on the single-diff task
-python -m temporal run --values 0.8,0.8
-
-# Parameter recovery from ONE learner (the default)
-python -m temporal recovery --mode single
-
-# Parameter recovery from two learners pooled at different cold-start costs
-python -m temporal recovery --mode coupled
-
-# Parameter recovery, value as a fixed design constant (the reference)
-python -m temporal recovery --mode uncoupled
-
-# f and k from decisions, from answer and skip times, and from both
-python -m temporal recovery --mode persistence
-
-# patience, estimated the way the controller does
-python -m temporal recovery --mode patience
-
-# one learner's data split across four learners at different points on the learning curve
-python -m temporal recovery --mode reseeded
-
-# what pinning the non-decision time at 0 costs, and whether freeing it gets f and k back
-python -m temporal recovery --mode t0
-
-# every pipeline above
-python -m temporal recovery --mode all
-
-# Human decision times against the deadline
-python -m temporal audit
-
-# Regression tests: seeded runs of the model, both controllers and the app, pinned in
-# tests/golden.json. Re-record with --record only when a change is meant to alter output.
-uv run pytest
-```
-
-Bare `python -m temporal` is shorthand for `python -m temporal run`.
-
-For `run`: `--values` takes `f,k`; `--cost` picks the cold-start profile; `--review-mode`
-and `--review-rate` set review; `--diff-spread` sets per-stage difficulty spread;
-`--decisions` caps the number of start decisions (default 200). For `recovery`: `--mode`
-picks the pipeline and `--reps` sets repetitions per grid point (default 5; most tables
-below used 3). For `audit`: `--path` points at a `decisions.jsonl` (default
-`data/decisions.jsonl`). For `temporal.controller`: `--values`, `--decisions` (default
-300), `--seed`.
 
 ---
 
@@ -865,11 +924,16 @@ temporal/
     store.py          the record on disk: append-only log, snapshot, saved controller
     desktop.py        the Tk window
     web.py            the same session served to a browser; static/index.html draws it
+    live.py           the live view of the accumulator for the decision on screen
+experiments/        the runs behind the README's results; each saves results/<name>/
+results/            their saved results (CSV), committed so tables and figures can be checked
+paper/              the paper's figures, drawn from results/ (python -m paper)
+  figures/            where they are written (gitignored)
 tests/              seeded regression tests (golden.json)
 RETIRED.md          results from earlier model versions, and ones later measurements replaced
 Dockerfile, fly.toml   hosting the web app; data in a volume at /data
 data/               human session records (gitignored)
-assets/             generated figures
+assets/             figures the README shows
 ```
 
 ---
@@ -883,7 +947,7 @@ reward landing when shown, γ = 0.9, `ACHIEVEMENT_SCALE = 4`, continuing bootstr
 and the ones these replace, are in `RETIRED.md` by model version. Recovery runs sweep a
 4×4 grid over `f, k ∈ {0.2, 0.6, 1.0, 1.5}`.
 
-**Recovery from one person (2026-10-10).** One simulated person, mid cold-start cost,
+**Recovery from one person (2026-10-10, `python -m experiments.recovery_sweep`).** One simulated person, mid cold-start cost,
 scheduled review, 1200 recorded decisions per fit split across four learners after 0,
 200, 500 and 1000 warm-up decisions, single-`diff` task, 4×4 grid × 3 reps (48 fits),
 95% bootstrap intervals over the fits:
@@ -895,16 +959,18 @@ scheduled review, 1200 recorded decisions per fit split across four learners aft
 - **The pass condition is met.** It was fixed on 2026-09-13: `f` and `k` RMSE ≤ 0.05, the
   step the controller rounds its estimates to (`snap_value`), so an estimate off by about
   one step plans like the truth or its neighbour. Both upper bounds are under 0.05.
-- **The worst grid points are effort-averse people who rarely start** (`f` RMSE 0.067 at
-  f 0.6, k 1.5) and low-`k` people for `k` (0.067 at f 0.2, k 1.5; 0.059 at f 1.0, k 0.2).
+- **The worst grid points are effort-averse people who rarely start**: `f` RMSE 0.067 at
+  f 0.6, k 1.5, and `k` RMSE 0.067 at f 0.2, k 1.5. The next worst for `k` is a low-`k`
+  person (0.059 at f 1.0, k 0.2).
 
-**The recovery pipelines (2026-10-15).** The same grid; `python -m temporal recovery`:
+**The recovery pipelines (2026-10-20, seeded per grid point).** The same grid;
+`python -m temporal recovery --mode MODE --reps R --out results/pipelines`:
 
 | pipeline | f: r | f: RMSE | k: r | k: RMSE |
 |---|---|---|---|---|
-| **single**, one continuous learner, 1200 decisions (3 reps) | 0.995 | 0.049 | 0.996 | 0.044 |
-| **coupled**, two stacked learners at different cold-start costs, 700 decisions (3 reps) | 0.998 | 0.030 | 0.997 | 0.035 |
-| **uncoupled**, value and cost set by design, 400 per condition (5 reps) | 0.999 | 0.026 | 0.998 | 0.027 |
+| **single**, one continuous learner, 1200 decisions (3 reps) | 0.997 | 0.037 | 0.998 | 0.033 |
+| **coupled**, two stacked learners at different cold-start costs, 700 decisions (3 reps) | 0.998 | 0.031 | 0.998 | 0.030 |
+| **uncoupled**, value and cost set by design, 400 per condition (5 reps) | 0.999 | 0.026 | 0.999 | 0.023 |
 
 ![Coupled recovery](assets/initiation_recovery_coupled.png)
 
@@ -913,16 +979,18 @@ Use `single` (or the four-learner design above) when modelling one real particip
 generates its own value and cost, correlated and confined to what it happens to
 experience, so it recovers less well than a designed contrast.
 
-**Prediction error is most of the variation in value.** On the question-type task, where
-the target holds `p` away from 1 and `δ` stays alive, `δ` supplies about 80% of the
-standard deviation of value. Eight fits, 700 decisions each, four `(f, k)` pairs × 2
-seeds, settings switched by random probes: `f` RMSE 0.049, `k` RMSE 0.027, value sd 0.35
-to 0.41, `corr(value, cost)` −0.22 to −0.50 (see "How value and cost together decide what can be measured"). On the single-`diff` task a learner masters the fixed difficulty, so
-`p → 1` and `δ` shrinks.
+**Prediction error is a large part of the variation in value (2026-10-20,
+`python -m experiments.value_variation`).** On the question-type task, where the target
+holds `p` away from 1 and `δ` stays alive, the carried error's standard deviation is 59%
+of value's (46% to 76%). Eight fits, 700 decisions each, the four people of the
+persistence test × 2 seeds, settings switched by random probes: `f` RMSE 0.045, `k` RMSE
+0.058, value sd 0.31 to 0.40, `corr(value, cost)` −0.50 to −0.22 (see "How value and cost
+together decide what can be measured"). On the single-`diff` task a learner masters the
+fixed difficulty, so `p → 1` and `δ` shrinks.
 
 **Skips do not help estimate `f` and `k` (2026-10-15).** Twelve simulated people (4
 profiles × 3 reps) who can give up on questions, 300 start decisions each (human-sized
-data), settings switched at random (`python -m temporal recovery --mode persistence`):
+data), settings switched at random (`python -m temporal recovery --mode persistence --reps 3`):
 
 | fitted from | f RMSE | k RMSE |
 |---|---|---|
@@ -933,12 +1001,11 @@ data), settings switched at random (`python -m temporal recovery --mode persiste
 Adding answer and skip times to the decisions makes both parameters worse, and on their
 own they cannot place `f`. A question's value, `p(1 − p)`, hardly varies across
 questions, while its cost, `1/p`, varies about 4×, so skip times mostly measure `k`, and
-the redo prompts already carry that. On the first real player's record, adding their
-answer and skip times at a fixed 10 s patience pulls the minimum of −log L from `f` 2.75
-to 2.15 (pyddm's own fits: 2.77 and 2.14). So the controller fits `f` and `k` from
-decisions, and uses time on questions only for patience.
+the redo prompts already carry that. So the controller fits `f` and `k` from decisions,
+and uses time on questions only for patience.
 
-**What each part of the fit contributes, alone and together (2026-10-15).** The 32 people
+**What each part of the fit contributes, alone and together (2026-10-15,
+`python -m experiments.fit_factorial`).** The 32 people
 of "Planning to measure" (4×4 grid × 2 seeds), question-type task, settings chosen by
 `InfoController`, 300 start decisions, with a true non-decision time of 0.3 s and true
 patience 10 s. Each dataset is fitted 8 ways: timed-out trials kept or dropped, `T0`
@@ -973,7 +1040,7 @@ from the sum of switching each, beyond 2 SE.
 simulated people (4 profiles × 3 reps), 300 start decisions each, settings switched at
 random. `f` and `k` were fitted from decisions; patience was then fitted from time on
 questions, once with the fitted `f` and `k` and once with the true ones (`python -m
-temporal recovery --mode patience`):
+temporal recovery --mode patience --reps 3`):
 
 | true patience | fitted with fitted `f`, `k` (3 reps) | give-ups per person |
 |---|---|---|
@@ -1003,7 +1070,7 @@ that reached a boundary and the optimizer inflates drift at no likelihood cost,
 shrinking the predicted undecided mass. The correction is to feed the censored counts
 back in as undecided trials. On the recovery design (48 fits of 1200 decisions, 4×4
 grid × 3 reps, four learners across the learning curve, `T_DUR = 7.0`, continuing
-bootstrap, 2026-10-10), 6,032 of 57,600 decisions (10.5%) timed out. Kept as undecided,
+bootstrap, 2026-10-10, `python -m experiments.recovery_sweep`), 6,032 of 57,600 decisions (10.5%) timed out. Kept as undecided,
 the mean bias was −0.2% for `f` and −0.5% for `k` (RMSE 0.035, 0.034). Dropped, it was
 +12.9% and +10.6% (RMSE 0.099, 0.099).
 
@@ -1022,28 +1089,15 @@ accumulator. It is left at its default, and it matters in three ways.
   lapse term does for giving up on questions (`persistence.LAPSE`), which had to be
   written by hand because that likelihood is ours rather than pyddm's.
 
-### The deadline was discarding human choices
+### The deadline must sit past human decision times
 
-Audited on 2026-09-13 with `python -m temporal audit`: the first player's 26 start and redo
-decisions, against the deadline of the time, 3.0 s.
-
-| decisions | n | median | 90th percentile | longest | past 3.0 s |
-|---|---|---|---|---|---|
-| start | 12 | 1.02 s | 5.52 s | 6.07 s | 3 (25%) |
-| redo | 14 | 0.94 s | 1.69 s | 2.99 s | 0 |
-| all | 26 | 0.98 s | 3.82 s | 6.07 s | **3 (11.5%)** |
-
-11.5% is far past a 2% tolerance, so `T_DUR` moved to 7.0 s, past the longest RT; none
-of the 26 is past it now. All three slow decisions (4.64, 5.61 and 6.07 s) were choices
-to start the next set, and two came right after a set in which the player skipped three
-questions. Three decisions are too few to call that a pattern, but they are exactly the
-hesitations a model of reluctance should see, and the fit had been recoding each one as
-"no decision".
-
-Under the current two-parameter model the same 26 rows give `f` 2.77, `k` 0.82, `T0`
-0.00, with `f` near the edge of its bound, which is what 26 rows buys. How far the three
-recoded choices moved the old five-parameter fit, and what the longer deadline did to
-simulated people, are V2 results in `RETIRED.md`.
+A decision that reaches no bound by `T_DUR` is undecided, and so is a person's click that
+comes later than `T_DUR`: the fit keeps that trial as "no decision" and loses the choice.
+Slow choices to start the next set are the hesitations a model of reluctance is meant to
+capture, so the deadline has to sit past the decision times people actually take.
+`T_DUR` was 3.0 s until 2026-09-13 and is 7.0 s now. `python -m temporal audit` checks a
+record against it and flags more than 2% of decisions past it. What the longer deadline
+did to simulated people is a V2 result in `RETIRED.md`.
 
 ### The lockout state is a model prediction
 
@@ -1059,31 +1113,108 @@ declines the redos and learns little, under `scheduled` escapes compound.
 The generating model and the fitted model are identical here, so successful recovery is
 expected. Real data is never generated by the fitted model.
 
-**Non-decision time is the one misspecification measured** (`python -m temporal recovery
---mode t0`, 2026-10-15). One learner per run, 1200 decisions, 3 reps per value, true
+**Non-decision time** (`python -m temporal recovery
+--mode t0 --reps 3`, 2026-10-20, seeded). One learner per run, 1200 decisions, 3 reps per value, true
 `f = k = 0.8`, current model. Each dataset is fitted twice: with `T0` pinned at 0 and
 with `T0` free. Means over reps:
 
 | true T0 | f pinned | k pinned | f free | k free | T0 recovered |
 |---|---|---|---|---|---|
-| 0.0 s | 0.77 | 0.80 | 0.78 | 0.81 | 0.04 |
-| 0.2 s | 0.73 | 0.75 | 0.81 | 0.81 | 0.22 |
-| 0.3 s | 0.69 | 0.71 | 0.79 | 0.79 | 0.28 |
-| 0.5 s | 0.64 | 0.66 | 0.78 | 0.79 | 0.48 |
+| 0.0 s | 0.81 | 0.79 | 0.81 | 0.79 | 0.02 |
+| 0.2 s | 0.78 | 0.75 | 0.86 | 0.82 | 0.21 |
+| 0.3 s | 0.69 | 0.71 | 0.79 | 0.80 | 0.34 |
+| 0.5 s | 0.66 | 0.67 | 0.81 | 0.80 | 0.47 |
 
-- **Pinning it biases both parameters down, more as the true value grows**: 7 to 8% at
-  0.2 s, 11 to 13% at 0.3 s, 17 to 20% at 0.5 s.
-- **Freeing it removes the bias.** `f` and `k` land within 0.03 of the truth at every
-  value, and `T0` itself within 0.03.
-- **It costs almost nothing when there is none.** With a true 0 the free fit returns 0.04.
+- **Pinning it biases both parameters down, more as the true value grows**: 3 to 6% at
+  0.2 s, 11 to 14% at 0.3 s, 16 to 18% at 0.5 s.
+- **Freeing it removes most of the bias.** `f` and `k` land within 0.02 of the truth at
+  0.0, 0.3 and 0.5 s. At 0.2 s `f` comes out 0.86. `T0` itself lands within 0.04.
+- **It costs almost nothing when there is none.** With a true 0 the free fit returns 0.02.
 - **It is free where real people are fitted**: the controller's estimate and the
   interface's "fit my parameters". The recovery pipelines pin it, since their simulated
   people have none.
 
+**The person may not share the model's constants.** The fit holds the discount factor γ
+at 0.9, the TD learning rate α at 0.05, `SIGMA` at 0.7 and `BOUND` at 1.5. Here each
+simulated person differs from the model in one of the four, and the fit isn't told.
+
+γ and α never enter the fit directly. They set the person's learned value, and the app
+computes value with the defaults. To match that, a second TD learner at the defaults runs
+on the same rewards as the person, and the analyst fit uses its value; this is what real
+data would get. The oracle fit uses the person's own value instead, so the difference
+between the two fits is the cost of a wrong γ or α. `SIGMA` and `BOUND` change only the
+person's own start, redo and give-up draws. The controller's rollouts and every fit keep
+the pinned values.
+
+The setup is the app's: question types with Elo ratings, skips on, and `InfoController`
+steering from the default setting. Each run has 300 start decisions plus their redo
+decisions. People (f, k) = (0.8, 0.8), (1.2, 0.4) and (0.6, 1.2), 5 seeds each, with the
+same seeds at every level (2026-10-21, `python -m experiments.misspecification`; Figure 5
+plots it beside the single-`diff` version below). Bias of the analyst fit is (estimate − true) / true, mean ± SE of 15 fits:
+
+| person | bias in f | bias in k | bias in f / k | undecided |
+|---|---|---|---|---|
+| all defaults | −2 ± 1% | +1 ± 1% | −2 ± 1% | 6.7% |
+| γ = 0.5 | −54 ± 5% | +81 ± 20% | −68 ± 6% | 3.4% |
+| γ = 0.7 | −47 ± 6% | +48 ± 9% | −60 ± 6% | 5.0% |
+| γ = 0.8 | −41 ± 4% | +15 ± 2% | −49 ± 3% | 7.9% |
+| γ = 0.95 | +51 ± 2% | −3 ± 2% | +56 ± 4% | 6.1% |
+| γ = 0.99 | +145 ± 5% | −9 ± 2% | +173 ± 10% | 6.9% |
+| α = 0.01 | −34 ± 2% | −10 ± 6% | −20 ± 9% | 8.1% |
+| α = 0.025 | −15 ± 1% | −7 ± 2% | −8 ± 3% | 7.7% |
+| α = 0.1 | +8 ± 1% | +6 ± 2% | +2 ± 2% | 6.0% |
+| α = 0.2 | +11 ± 1% | +8 ± 2% | +3 ± 2% | 6.2% |
+| `SIGMA` = 0.5 | −2 ± 2% | −3 ± 1% | +0 ± 2% | 11.0% |
+| `SIGMA` = 0.6 | +1 ± 1% | −1 ± 1% | +2 ± 1% | 9.3% |
+| `SIGMA` = 0.85 | +3 ± 2% | +1 ± 2% | +2 ± 1% | 3.1% |
+| `SIGMA` = 1.0 | +6 ± 2% | +2 ± 2% | +4 ± 3% | 1.3% |
+| `BOUND` = 1.0 | +61 ± 1% | +67 ± 4% | −3 ± 2% | 0.8% |
+| `BOUND` = 1.25 | +20 ± 2% | +23 ± 2% | −2 ± 1% | 3.0% |
+| `BOUND` = 1.75 | −15 ± 1% | −17 ± 1% | +2 ± 1% | 11.3% |
+| `BOUND` = 2.0 | −25 ± 1% | −28 ± 1% | +3 ± 1% | 15.5% |
+
+`BOUND` and `SIGMA` are constants of the accumulator. A wrong value for either changes
+`f` and `k` by about the same proportion, so the ratio `f / k` stays close to the truth.
+γ and α are constants of the learner. They change the value that goes into the drift,
+and the ratio does not stay close.
+
+A bound of 1.0 instead of 1.5 makes both `f` and `k` come out about 60% too high, but
+`f / k` stays within 3% of the truth at every bound from 1.0 to 2.0. The share of
+undecided decisions also changes with the bound, from 0.8% at 1.0 to 15.5% at 2.0, so
+that share can be used to check the pinned bound against real data. `SIGMA` has little
+effect: from 0.5 to 1.0, `f`, `k` and their ratio all stay within 6%, although the share
+of undecided decisions falls from 11.0% to 1.3%.
+
+γ has the largest effect. `f / k` comes out 49% too low at γ = 0.8 and 56% too high at
+0.95. The oracle fit is within 5% at every γ, so the whole error comes from computing
+value with γ = 0.9. A person who discounts more steeply than 0.9 looks less sensitive to
+reward and more averse to effort than they are. A person who discounts less looks much
+more sensitive to reward. This puts a size on the limitation that `f` is confounded with
+the discount factor (see "Known limitations"). `k` is least precise at low γ, because
+such a person starts few sets (12% of start decisions at γ = 0.5) and sees few redo
+prompts (24, against 314 at the defaults).
+
+A wrong learning rate mostly changes `f`: −34% at α = 0.01 and +11% at 0.2. The ratio
+moves at slow rates (−20 ± 9% at 0.01, −8 ± 3% at 0.025) and stays within 3% at fast
+ones.
+
+The same command also runs the single-`diff` task of the recovery pipelines (one learner,
+1200 decisions, no redo decisions). The pattern is the same with one exception: a high γ
+pushes `k` toward 0. At γ = 0.95, `k` comes out 28 ± 6% too low; at 0.99 it is fitted as 0
+and `f` comes out 236 ± 21% too high. A low γ biases `f` more on this task (−75 ± 3% at
+0.5) and `k` less (+17 ± 3%). For the ratio, `BOUND` and `SIGMA` keep `f / k` within 4%,
+γ moves it (−52 ± 1% at 0.8), and α moves it by at most 8%. The likely reason `k` holds up
+on the app's task is the redo decisions, whose cost varies more than at any other
+decision. All of these fits used γ = 0.9, `ACHIEVEMENT_SCALE = 4`, the continuing bootstrap
+and `T_DUR = 7.0`.
+
 ### Fixed parameters carry the identifiability
 
 `SIGMA`, `BOUND` and `T_DUR` are held fixed precisely so they cannot absorb variance
-belonging to the parameters. Freeing them removes the identifiability.
+belonging to the parameters. Freeing them removes the identifiability. Pinning them at the
+wrong value also has a cost: a person whose bound is 1.0 rather than 1.5 gets `f` and `k`
+both about 60% too high, though their ratio stays within 3% (see "The person may not
+share the model's constants" above).
 
 ### How value and cost together decide what can be measured
 
@@ -1097,7 +1228,8 @@ offset, and cost correlated with value (`cost = a + b · value`) identifies both
 What correlation, and too little variation in cost, do cost is **precision**: more
 decisions for the same accuracy. Expected standard deviation from 300 start decisions,
 from the Fisher information of the decisions at the true `f`, `k` (16 people × 2 seeds,
-default setting for starts, a fixed redo-prompt setting for starts with redos; medians):
+default setting for starts, a fixed redo-prompt setting for starts with redos; medians;
+`python -m experiments.precision`):
 
 | decisions in the data | SD of f | SD of k | sd of cost |
 |---|---|---|---|
@@ -1114,14 +1246,15 @@ measure"). The correlation of value and cost is still the number to re-check aft
 change to cost or value: a lever that set cost from the person's state, as `reentry_cost`
 once did, can push it toward proportional (V1 cases in `RETIRED.md`).
 
-Carrying prediction error into value (2026-09-21) raised the correlation and improved
-recovery anyway, because it added far more variance to value than it did shared
-variance with cost. On the question-type task at a held target, 400 decisions:
+Carrying prediction error into value (2026-09-21) raised the correlation only slightly,
+because it added more variance to value than it did shared variance with cost. On the
+question-type task at the default setting, `f = k = 0.8`, 400 decisions, means over 8
+seeds (2026-10-20, `python -m experiments.value_variation`):
 
-| | corr(V(0), cost) | corr(δ, cost) | corr(value, cost) | sd of value |
+| | corr(V(0), cost) | corr(δ, cost) | corr(value, cost) | sd of value, V(0) → with δ |
 |---|---|---|---|---|
-| feedback on | −0.16 | −0.14 | −0.24 | 0.178 → 0.228 |
-| feedback off | −0.30 | −0.23 | −0.40 | 0.156 → 0.223 |
+| feedback on | −0.29 | −0.11 | −0.32 | 0.221 → 0.273 |
+| feedback off | −0.32 | −0.13 | −0.34 | 0.221 → 0.294 |
 
 Both channels correlate with cost for the same reason: cost rises with review load,
 review brings back questions the person already missed, and those earn less than
@@ -1135,19 +1268,22 @@ expected. The correlation is a property of the task, not of the carry.
   `V(0) ≈ γ^(n−1)·E[r] / (1 − γ^n)`, so `f` is only identified up to that factor, and,
   since `ACHIEVEMENT_SCALE` multiplies value, up to that scale too. State `γ`, the scale
   and the bootstrap whenever an `f` value is reported; an `f` fitted under the terminal
-  bootstrap is not on the same scale.
+  bootstrap is not on the same scale. In simulation, a person whose γ is 0.8 gets `f`
+  41% too low and `k` 15% too high (see "The person may not share the
+  model's constants").
 - The non-decision time is bounded to [0, 0.5] s when fitted. Below that bound only the
   2% lapse mixture gives a fast decision any density, so a person whose non-decision time
   exceeds their own fastest decision cannot be fitted, and the bound has to move with the
-  data. The first player's 26 decisions put `T0` at 0.00 with a fastest decision of
-  0.51 s, which cannot be told apart from a small positive value.
-- The deadline is set from one person's decisions. `T_DUR = 7.0` sits past the longest
-  RT seen so far (6.07 s); anyone slower is censored again. `python -m temporal audit`
-  flags a share past the deadline above 2%.
+  data. With few decisions, a fitted `T0` of 0 cannot be told apart from a small positive
+  value.
+- The deadline is set from the human decision times seen so far. Anyone slower than
+  `T_DUR = 7.0` is censored again; `python -m temporal audit` flags a share past the
+  deadline above 2%.
 - The value range is endogenous. A stalled learner stops generating value variation,
   so there is less leverage on `f`; the worst recovery checked sat at high `k`.
-- At the start node, effort cost is weak and retrospective: review load moves cost by
-  about 0.02. Nearly all start-node cost variation in simulation comes from sessions
+- At the start node, effort cost is weak and retrospective: review load adds about 0.01
+  to cost on average, with a standard deviation under 0.02 (same runs as the clip check
+  below). Nearly all start-node cost variation in simulation comes from sessions
   going cold and warm, which human data never shows the fit (see Human sessions). The
   redo node's cost varies far more, which is why `InfoController` leans on it.
 - A type's rating only moves when that type is served. Types far from every target the
@@ -1161,7 +1297,10 @@ expected. The correlation is a property of the task, not of the carry.
   value asserts they are one sensitivity. That is a substantive claim about
   people rather than a simplification, and it has not been tested against a human.
 - The prediction error is clipped at `±DELTA_CLIP` (1.0) so `value` stays on a bounded
-  grid. It binds on about 0.5% of decisions with feedback hidden and never with it on.
+  grid. At the default setting it binds on 0.4 to 0.5% of start decisions with feedback
+  shown and 0.7 to 0.9% with it hidden, and on no redo decisions (four people, f, k =
+  0.8/0.8, 1.2/0.4, 0.6/1.2, 1.2/1.2, 2 seeds × 300 start decisions, with and without redo
+  prompts; 2026-10-24).
 - Learning still saturates at a fixed difficulty, and under `choice` and `quiet` the
   missed list grows without bound; nothing forgets.
 - Value and cost are discretized (`VALUE_STEP`, `COST_STEP`) to keep the number of
@@ -1174,15 +1313,15 @@ expected. The correlation is a property of the task, not of the carry.
   different time scale here, not two processes.
 - Retiring questions, never repeating one within a set, and treating a quick fix as a
   typo are interface rules with no simulator counterpart. `RETIRE_AFTER = 3` and
-  `SLIP_SECONDS = 2` are judgment calls: the first player got 34 × 8 right on its 8th
-  showing, which retirement would now prevent.
+  `SLIP_SECONDS = 2` are judgment calls: retirement stops a question someone might have
+  got right on a later showing.
 - Treating an answer as a censored time to give up assumes how long a question takes
   to solve does not depend on motivation. Someone who rushes when they want to stop
   breaks that.
 - Time on a question includes anything else they did meanwhile. Walking away mid-question
   reads as long persistence.
-- Simulated solve times are an assumption (median `4 s / p^0.7`, lognormal), checked only
-  against one person's 30 answers.
+- Simulated solve times are an assumption (median `4 s / p^0.7`, lognormal), not fitted
+  to human answer times.
 
 ---
 
@@ -1262,12 +1401,16 @@ recurrence over all future sets (`value.CONTINUING = True`). The old terminal bo
 `V_next = 0`, is still available for comparison. `value_at_choice_point` is still `V(0)`,
 the state being entered.
 
-- **Why it matters for measurement.** Under the continuing bootstrap value is larger and
-  varies about twice as much, and `f` is identified from variation in value. The V2
-  measurements of both, and of whether the switch moved the reward controller closer to
-  the best fixed setting (it did not), are in `RETIRED.md`.
-- **Real sessions.** A player's saved value weights were learned under the terminal
-  bootstrap and adapt from their next set on.
+- **Why it matters for measurement.** Under the continuing bootstrap value is larger
+  (mean 0.57 against 0.22) and varies about 1.5 times as much (sd 0.27 against 0.18),
+  and `f` is identified from variation in value. Re-measured under V3 on 2026-10-24: f =
+  k = 0.8, default setting, 8 seeds × 400 start decisions, the same runs with
+  `value.CONTINUING` switched. The V2 measurements, which put the spread at about twice
+  on the single-`diff` recovery task (sd 0.222 against 0.115),
+  and whether the switch moved the reward controller closer to the best fixed setting
+  (it did not), are in `RETIRED.md`.
+- **Saved sessions.** Value weights saved under the terminal bootstrap adapt from the
+  next set on.
 
 ---
 
@@ -1287,7 +1430,7 @@ the app runs, how the code is organised, how it is checked, and how fast it plan
   (`app/session.py`), the record on disk (`app/store.py`) and the Tk window
   (`app/desktop.py`). The web frontend subclasses the same `Session`, so both still
   write the same record. Commands are now `python -m temporal ...` ("Running it").
-- **Regression tests** (`uv run pytest`, about 25 s). They pin seeded outputs in
+- **Regression tests** (`uv run pytest`, about 7 s on 2026-10-24). They pin seeded outputs in
   `tests/golden.json`: the simulator under scheduled review and under redo prompts,
   people under a fixed setting and under both controllers, a fit to designed data and
   one to a learner, the give-up likelihood and patience, and a scripted app session
@@ -1296,7 +1439,8 @@ the app runs, how the code is organised, how it is checked, and how fast it plan
   pyddm's optimiser stops a few 1e-5 apart between runs. Re-record (`--record`) only
   for a change meant to alter output, and say why in the commit.
 - **Planning is about 3× faster.** One `InfoController` plan (96 settings × 6 draws
-  × 25 decisions, f 0.8, k 0.8, after 26 decisions) took 15.3 s and now takes 4.6 s.
+  × 25 decisions, f 0.8, k 0.8) took 15.3 s before this change and 4.6 s after it
+  (2026-10-11). Re-timed on 2026-10-24, it takes about 1.5 s.
   The same speedup applies to every simulation and recovery sweep. Two changes did it:
   - A start or redo draw no longer goes through pyddm's `Solution.sample(1)`. That
     call rebuilt its sampling tables and ran its argument-checking decorators on every

@@ -22,7 +22,9 @@ that did not pan out are listed at the end, by the model they belonged to.
 
 Changes since 2026-09-21 that did not change the model: the information-seeking
 controller and redo-prompt settings (2026-10-11), the package restructure (2026-10-11,
-regression tests reproduce every seeded output).
+regression tests reproduce every seeded output), and the move of the experiments and
+paper figures into the repo, with seeded recovery sweeps (2026-10-20). Only the sweeps'
+tables were re-run.
 
 `f` values are on different scales across versions: `f` is identified only up to γ,
 `ACHIEVEMENT_SCALE` and the bootstrap, all of which changed between V1 and V2.
@@ -30,6 +32,48 @@ regression tests reproduce every seeded output).
 ---
 
 ## V3, superseded by later V3 measurements
+
+### Recovery pipelines and non-decision time, unseeded (superseded 2026-10-20)
+
+The `single`, `coupled`, `uncoupled` and `t0` sweeps drew their datasets from whatever
+state the random generators were in, so a re-run could not reproduce them. On 2026-10-20
+each dataset got its own seed (`recovery.seed_point`) and the four were re-run, and the
+README now holds the seeded numbers. The model, grid and reps are the same, so the
+differences are sampling. The 2026-10-15 numbers:
+
+| pipeline | f: r | f: RMSE | k: r | k: RMSE |
+|---|---|---|---|---|
+| single (3 reps) | 0.995 | 0.049 | 0.996 | 0.044 |
+| coupled (3 reps) | 0.998 | 0.030 | 0.997 | 0.035 |
+| uncoupled (5 reps) | 0.999 | 0.026 | 0.998 | 0.027 |
+
+| true T0 | f pinned | k pinned | f free | k free | T0 recovered |
+|---|---|---|---|---|---|
+| 0.0 s | 0.77 | 0.80 | 0.78 | 0.81 | 0.04 |
+| 0.2 s | 0.73 | 0.75 | 0.81 | 0.81 | 0.22 |
+| 0.3 s | 0.69 | 0.71 | 0.79 | 0.79 | 0.28 |
+| 0.5 s | 0.64 | 0.66 | 0.78 | 0.79 | 0.48 |
+
+That run read the table as "freeing `T0` puts `f` and `k` within 0.03 of the truth at
+every value". The seeded run does not bear that out: at a true 0.2 s, `f` came out 0.86.
+
+### How much of value is prediction error, and the carry table (superseded 2026-10-20)
+
+These were measured by hand around 2026-09-21. No script was kept, and the people,
+seeds and setting were not recorded. `python -m experiments.value_variation` replaces
+them and states all three, so the README's numbers can be re-run. It does not reproduce
+"about 80%": in the new run the carried error has 59% of value's standard deviation (46%
+to 76%). The old figures:
+
+- `δ` supplied about 80% of the standard deviation of value. Eight fits, 700 decisions,
+  four `(f, k)` pairs × 2 seeds, random probes: `f` RMSE 0.049, `k` RMSE 0.027, value sd
+  0.35 to 0.41, `corr(value, cost)` −0.22 to −0.50.
+- At a held target, 400 decisions:
+
+| | corr(V(0), cost) | corr(δ, cost) | corr(value, cost) | sd of value |
+|---|---|---|---|---|
+| feedback on | −0.16 | −0.14 | −0.24 | 0.178 → 0.228 |
+| feedback off | −0.30 | −0.23 | −0.40 | 0.156 → 0.223 |
 
 ### Feedback shown against hidden, one person (superseded 2026-10-15)
 
@@ -47,14 +91,6 @@ At 32 seeds over 200 decisions the 30% target reached −3.90 ± 2.19 (−1.8 SE
 read as a suggested sign flip (hide feedback from someone missing most questions). The
 2026-10-15 run found no flip: feedback shown was ahead or undetermined at every target,
 and ahead beyond 2 SE at 20%.
-
-### Patience on the first player's record (superseded 2026-10-15)
-
-"Their fitted patience is 2.8 s (−log L 38, against 55 at 10 s)." The `f` and `k` it was
-computed with are not recorded, and it does not reproduce under the current code: with
-the controller's estimate on that record (the prior, `f = k = 0.8`, since 26 decisions
-are under its 40-row floor) patience is 1.7 s (−log L 73.9 against 102.2 at 10 s). The
-record now also counts leaving from a question as giving up (65 questions, 14 given up).
 
 ### Single-`diff` recovery after the reaction terms were removed (superseded 2026-10-10)
 
@@ -198,16 +234,6 @@ true `f = k = 0.8`, fitted with `T0` pinned and free:
 Pinning cost 8 to 15%; freeing it removed the bias. An earlier version at `T_DUR = 3.0`,
 terminal bootstrap, pinned fits only, reported −9.9% to −15.5%.
 
-### The first player's decisions refitted at the new deadline (five-parameter fit)
-
-| deadline | decided / undecided | f | k | b_seen | b_unseen | b_fb |
-|---|---|---|---|---|---|---|
-| 3.0 s | 23 / 3 | 2.34 | 0.69 | +0.26 | +0.19 | +0.20 |
-| 7.0 s | 26 / 0 | 1.76 | 0.49 | +0.30 | +0.95 | +0.18 |
-
-Three recoded decisions moved `f` by 25% and `k` by 29%. `b_unseen` was unconstrained
-(no set with feedback hidden). A five-parameter fit on this data took 38 s instead of 17.
-
 ### What the longer deadline did to simulated people
 
 At `f = k = 0.8`, terminal bootstrap: 141 sets in 400 start decisions at 7.0 s against 51
@@ -316,9 +342,6 @@ carries most of what identifies `k` (README, "Planning to measure").
   against 210 for the best fixed setting. With the long re-test it hid feedback from its
   first plan: 89 reward over 200 decisions against 2.6 at the default.
 - **Lockout.** At high re-entry cost a learner recorded 0 GOs in 200 decisions.
-- **The joint fit on the first real player** moved `f` from 3.0 to 0.0 (fast skips pulling
-  it down), under rules before the record was rebuilt. On the current record and model
-  the pull is 2.75 → 2.15 (README, "Skips do not help").
 - **Elo serving.** On a person perfect at addition and ~75% at 2-digit × 1-digit
   multiplication, 60 answers at a 75% target stopped serving addition; 11 of the last 20
   questions were 2-digit × 1-digit. Measured before the first-showing rule.
@@ -346,13 +369,13 @@ value. Replaced by the drift-diffusion model in May 2026.
 | boredom rate `b`, time-since-engagement cost | V0 | boredom as sustained `|δ| ≈ 0` (V3) | no mechanism; not recoverable |
 | fraction-right reward | V1 | hard right answers `4·Σ(1 − p)/n` | made the easiest setting always the most rewarding |
 | `difficulty` as a TD feature | V1 | `φ = [1, stage position]` | collinear with the intercept, ~1% of `V(0)` |
-| 3-second countdown on prompts | V1 interface | prompts wait; slow choices count as undecided at fit time | invented 20 consecutive "decisions" in one session |
-| `T_DUR = 3.0` | V1 | 7.0 s | discarded 11.5% of a real player's choices |
+| 3-second countdown on prompts | V1 interface | prompts wait; slow choices count as undecided at fit time | logged "decisions" when nobody chose |
+| `T_DUR = 3.0` | V1 | 7.0 s | discarded human choices slower than 3 s |
 | terminal value bootstrap | V1 | continuing bootstrap | the task is a cycle; `f` recovered worse |
 | `T0` pinned at 0 for real people | V1 | fitted in [0, 0.5] s | biased `f` and `k` 8 to 15% low |
 | reaction terms `b_seen`, `b_unseen`, `b_fb` (five-parameter fit) | V1, V2 | prediction error carried in value; reward lands when shown | patched a learner that produced no mid-set error; no mechanism |
 | `f` RMSE ≈ 0.035 pass condition for one learner | V2 | `f`, `k` RMSE ≤ 0.05 | belonged to a designed, not self-generated, value range |
 | seeding learners across the learning curve to widen value | V2 | kept for the paper's design, not as a fix | did nothing detectable for `f` |
-| joint fit of decisions with answer and skip times | V2, V3 | decisions for `f` and `k`; times for patience only | made `f` worse; moved a real player's `f` from 3.0 to 0.0 |
+| joint fit of decisions with answer and skip times | V2, V3 | decisions for `f` and `k`; times for patience only | made `f` and `k` worse in simulation |
 | reward-planning `Controller` as the app's controller | V2, V3 | `InfoController` (2026-10-11) | left `k` poorly measured (RMSE 0.22 to 0.29) |
 | 84 settings, rollouts always scheduling review | V3 | 96 settings, rollouts follow each setting's review mode | planned a task the person never saw |

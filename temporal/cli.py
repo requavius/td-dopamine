@@ -6,6 +6,7 @@
 """
 import argparse
 import json
+from pathlib import Path
 
 import pandas as pd
 
@@ -104,6 +105,13 @@ def _report(stats, label):
     ))
 
 
+# The sweep's per-dataset results, as `<out>/<mode>.csv`, when --out is given.
+def _save(args, mode, res):
+    if args.out:
+        Path(args.out).mkdir(parents=True, exist_ok=True)
+        res.to_csv(Path(args.out) / f"{mode}.csv", index=False)
+
+
 def cmd_recovery(args):
     if args.mode in ("single", "all"):
         print("=== single-run sanity check (f = 0.8, k = 0.8) ===")
@@ -113,6 +121,7 @@ def cmd_recovery(args):
 
         print(f"\n=== single-run recovery ({len(GRID)} points x {args.reps} reps) ===")
         res = recovery_single(GRID, reps=args.reps)
+        _save(args, "single", res)
         _report(res.attrs["stats"], "single-run")
 
     if args.mode in ("uncoupled", "all"):
@@ -123,6 +132,7 @@ def cmd_recovery(args):
 
         print(f"\n=== uncoupled recovery ({len(GRID)} points x {args.reps} reps) ===")
         res = recovery(GRID, reps=args.reps)
+        _save(args, "uncoupled", res)
         _report(res.attrs["stats"], "uncoupled")
 
     if args.mode in ("coupled", "all"):
@@ -133,23 +143,31 @@ def cmd_recovery(args):
 
         print(f"\n=== coupled recovery ({len(GRID)} points x {args.reps} reps) ===")
         res = recovery_coupled(GRID, reps=args.reps)
+        _save(args, "coupled", res)
         _report(res.attrs["stats"], "coupled")
 
     if args.mode in ("persistence", "all"):
         print(f"\n=== persistence recovery ({len(PERSISTENCE_GRID)} people x {args.reps} reps) ===")
         res = recovery_persistence(PERSISTENCE_GRID, reps=args.reps)
+        _save(args, "persistence", res)
         for source, s in res.attrs["stats"].items():
             print(f"{source:>12}: f RMSE = {s['f']:.3f}  k RMSE = {s['k']:.3f}")
 
     if args.mode in ("patience", "all"):
         print(f"\n=== patience recovery ({len(PATIENCE_GRID)} people x {args.reps} reps) ===")
         res = recovery_patience(PATIENCE_GRID, reps=args.reps)
+        _save(args, "patience", res)
         for source, x in res.attrs["stats"].items():
             print(f"patience {source}: typically off by {x:.2f}x")
+        for true, g in res.groupby("patience_true"):
+            fitted = ", ".join(f"{x:.1f}" for x in sorted(g.patience_given_fit))
+            print(f"true {true:g} s: fitted with fitted f, k {fitted} s; "
+                  f"{g.gave_up.min()} to {g.gave_up.max()} give-ups per person")
 
     if args.mode in ("t0", "all"):
         print(f"\n=== non-decision time ({len(T0_GRID)} values x {args.reps} reps) ===")
         res = recovery_t0(T0_GRID, reps=args.reps)
+        _save(args, "t0", res)
         print("\nmean over reps:")
         print(res.groupby("t0_true")[["f_pinned", "k_pinned", "f_free", "k_free", "t0_hat"]]
               .mean().round(3).to_string())
@@ -158,6 +176,7 @@ def cmd_recovery(args):
         print(f"\n=== one person at four points on the learning curve "
               f"({len(GRID)} points x {args.reps} reps) ===")
         res = recovery_reseeded(GRID, reps=args.reps)
+        _save(args, "reseeded", res)
         _report(res.attrs["stats"], "reseeded")
 
 def cmd_audit(args):
@@ -229,6 +248,7 @@ def build_parser():
                             "all: run every pipeline.")
     p_rec.add_argument("--reps", type=int, default=5,
                        help="repetitions per grid point")
+    p_rec.add_argument("--out", help="folder to save each sweep's results to, as <mode>.csv")
     p_rec.set_defaults(func=cmd_recovery)
 
     p_audit = sub.add_parser("audit", help="human decision times against the model's deadline")

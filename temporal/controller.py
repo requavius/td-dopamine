@@ -406,8 +406,10 @@ def plan_in_worker(controller, state, params):
 
 # A simulated person, measured the way the interface measures a human: the controller
 # only ever sees the Elo rating built from their answers, never their true difficulty.
+# `each`, if given, is called with the simulation after every start decision (and the set
+# it started), before the controller plans: for recording a run as it goes.
 def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
-        reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True):
+        reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True, each=None):
     random.seed(seed)
     np.random.seed(seed)
     start = controller.env if controller else env
@@ -428,6 +430,8 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
         st.t += 1
         if went:
             sim.run_episode()
+        if each is not None:
+            each(sim)
         if controller is not None and controller.due(st):
             controller.plan(measured(st, ratings), params)
             apply(sim, controller.env)

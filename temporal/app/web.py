@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from ..model.persistence import attempts_to_frame
+from .live import model_view
 from .session import DEFAULTS, MIN_FIT_ROWS, Session, fit_summary
 from .store import DATA_DIR as DESKTOP_DATA_DIR
 
@@ -132,6 +133,7 @@ class WebApp(Session):
         self.prompt_at = time.perf_counter()
         self._decide = on_done
         self.show(screen="decision", prompt=prompt, yes=yes_label, no=no_label)
+        self.decision_now["seq"] = self.seq  # the screen the browser times it from
 
     # The browser holds the flash before drawing what comes next, and starts the clock after.
     def flash(self, text, then):
@@ -196,7 +198,8 @@ class WebApp(Session):
             self.poll_fit()
             out.update(settings=self.settings(), stats=self.stats_text(), now=self.now_text(),
                        controller=self.controller_status, fit=self.fit_result,
-                       fitting=self._fit_future is not None)
+                       fitting=self._fit_future is not None,
+                       model=self.decision_now and model_view(self, self.decision_now))
         return out
 
 

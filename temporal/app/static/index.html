@@ -88,12 +88,32 @@
   .panel p { margin: 6px 0; color: var(--muted); }
   .panel button { padding: 7px 12px; font-size: 14px; margin: 8px 8px 0 0; }
   .panel a { color: var(--accent); }
+
+  /* The task, with the live accumulator beside it when dev stuff turns it on. */
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  @media (min-width: 900px) { .stage.with-ddm { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .ddm-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+              padding: 18px; font-size: 14px; min-width: 0; }
+  .ddm-card h2 { font-size: 15px; margin: 0 0 8px; }
+  .ddm-card pre { font-family: var(--mono); font-size: 12px; margin: 0 0 8px; white-space: pre-wrap; }
+  .ddm-card p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+  .ddm-card canvas { display: block; width: 100%; height: 300px; }
 </style>
 </head>
 <body>
 <div class="wrap" id="wrap">
   <div class="status" id="status" hidden><span id="who"></span><span id="saving"></span></div>
-  <main class="task" id="task" aria-live="polite"><p class="note">loading…</p></main>
+  <div class="stage" id="stage">
+    <main class="task" id="task" aria-live="polite"><p class="note">loading…</p></main>
+    <aside class="ddm-card" id="ddm-card" hidden>
+      <h2>The accumulator, live</h2>
+      <p>What the model predicts for the start or redo decision on screen, under the
+      current estimate. Grey paths are draws from it, run on your clock; the blue line is
+      how long you have been deciding.</p>
+      <pre id="ddm-text">no decision yet</pre>
+      <canvas id="ddm" aria-label="drift-diffusion model of the current decision"></canvas>
+    </aside>
+  </div>
   <details class="panel" id="panel" hidden>
     <summary>dev stuff</summary>
     <div class="sections">
@@ -107,6 +127,7 @@
       <input type="range" data-set="cold" min="0.05" max="1.5" step="0.01">
       <label>review rate (owed questions return) <span class="val" data-val="review"></span></label>
       <input type="range" data-set="review" min="0" max="1" step="0.01">
+      <label class="check"><input type="checkbox" id="show-ddm"> show the accumulator next to the task</label>
       <label class="check"><input type="checkbox" data-set="return_skipped"> skipped questions come back too</label>
       <label class="check"><input type="checkbox" data-set="controller"> controller sets target, review, feedback, skipped, redo prompts</label>
       <label class="check"><input type="checkbox" data-set="show_count"> show stage count</label>
@@ -212,6 +233,7 @@ function drawStart() {
   token = null; seq = null; screen = "start";
   statusBar.hidden = true;
   panel.hidden = true;
+  showDdmCard(false);
 
   const consent = el("div", { class: "consent" });
   consent.append(document.getElementById("consent-text").content.cloneNode(true));
@@ -322,7 +344,7 @@ function drawDecision(view) {
     else if (e.key === "2") decide(0);
   };
   document.addEventListener("keydown", keyHandler);
-  painted(() => { screen = "decision"; });
+  painted(() => { screen = "decision"; if (!ddmFrame) ddmFrame = requestAnimationFrame(drawModel); });
 }
 
 function ended(message) {
@@ -364,6 +386,7 @@ window.addEventListener("pageshow", e => { if (e.persisted) location.reload(); }
 
 function updatePanel(data) {
   panel.hidden = !data.panel;
+  showDdmCard(data.panel);
   if (!data.panel) return;
   for (const input of panel.querySelectorAll("[data-set]")) {
     if (input === document.activeElement) continue; // don't pull a control out from under a drag
@@ -380,7 +403,177 @@ function updatePanel(data) {
   document.getElementById("controller").textContent = "controller: " + data.controller;
   document.getElementById("fit").textContent = data.fit;
   document.getElementById("fit-button").disabled = data.fitting;
+  showModel(data.model);
 }
+
+// ---------------------------------------------------------------- the live accumulator
+
+const ddm = document.getElementById("ddm");
+const ddmCard = document.getElementById("ddm-card");
+const showDdm = document.getElementById("show-ddm");
+const ddmText = document.getElementById("ddm-text");
+let model = null;  // the server's view of the decision on screen (or the last one)
+let paths = [];    // sample paths drawn in this browser; the server's generator is never touched
+let ddmFrame = null;
+const PATHS = 24, PATH_DT = 0.01;
+
+function gauss() { return Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random()); }
+
+// Each path to its bound or the deadline: [[t, x], ...] and the side it ended on.
+function samplePaths(m) {
+  const out = [], sd = m.sigma * Math.sqrt(PATH_DT);
+  for (let i = 0; i < PATHS; i++) {
+    let x = 0, t = m.t0, side = 0;
+    const pts = [[t, 0]];
+    while (t < m.t_dur && !side) {
+      t += PATH_DT;
+      x += m.drift * PATH_DT + sd * gauss();
+      if (Math.abs(x) >= m.bound) { side = Math.sign(x); x = side * m.bound; }
+      pts.push([t, x]);
+    }
+    out.push({ pts, side, end: t });
+  }
+  return out;
+}
+
+function showModel(m) {
+  if (!m) return;
+  const fresh = !model || m.seq !== model.seq;
+  if (fresh) paths = samplePaths(m);
+  model = m;
+  const pct = x => (100 * x).toFixed(0) + "%";
+  const label = m.node === "start" ? "start the next set" : "redo the miss";
+  ddmText.textContent = [
+    `${label}:  value ${m.value.toFixed(2)}  cost ${m.cost.toFixed(2)}`,
+    `f ${m.f.toFixed(2)}  k ${m.k.toFixed(2)}  T0 ${m.t0.toFixed(2)}s  ->  drift ${m.drift.toFixed(2)}`,
+    `predicted: ${m.yes} ${pct(m.p_go)}  ${m.no} ${pct(m.p_no)}  undecided by ${m.t_dur}s ${pct(m.p_undecided)}`,
+    m.go === null ? "deciding..." : `you: ${m.go ? m.yes : m.no} at ${m.rt.toFixed(2)}s`
+      + (m.rt > m.t_dur ? " (past the deadline: undecided to the fit)" : ""),
+    m.note,
+  ].join("\n");
+  if (!ddmFrame) ddmFrame = requestAnimationFrame(drawModel);
+}
+
+// Seconds since the decision screen appeared, or the RT once it is made.
+function ddmClock() {
+  if (!model) return 0;
+  if (model.go !== null) return model.rt;
+  if (screen === "decision" && seq === model.seq) return secs();
+  return 0;
+}
+
+function drawModel() {
+  ddmFrame = null;
+  if (!model || ddmCard.hidden) return;
+  const m = model, css = getComputedStyle(document.documentElement);
+  const col = n => css.getPropertyValue(n).trim();
+  const dpr = window.devicePixelRatio || 1;
+  const W = ddm.clientWidth, H = ddm.clientHeight;
+  if (ddm.width !== Math.round(W * dpr) || ddm.height !== Math.round(H * dpr)) {
+    ddm.width = Math.round(W * dpr); ddm.height = Math.round(H * dpr);
+  }
+  const g = ddm.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  const L = 46, R = 12, strip = 54, top = 6 + strip, bot = H - 22 - strip;
+  const X = t => L + (W - L - R) * Math.min(t, m.t_dur) / m.t_dur;
+  const Y = x => top + (bot - top) * (m.bound - x) / (2 * m.bound);
+  const now = Math.min(ddmClock(), m.t_dur);
+  g.font = "12px system-ui, sans-serif";
+  g.lineCap = "round";
+
+  // Non-decision time.
+  g.fillStyle = col("--line");
+  g.globalAlpha = 0.5;
+  g.fillRect(X(0), top, X(m.t0) - X(0), bot - top);
+  g.globalAlpha = 1;
+
+  // Predicted RT densities, outward from each bound, on one scale.
+  const peak = Math.max(1e-9, ...m.top, ...m.bottom);
+  const density = (pdf, y0, dir, colour) => {
+    g.beginPath();
+    g.moveTo(X(0), y0);
+    pdf.forEach((p, i) => g.lineTo(X((i + 0.5) * m.bin), y0 - dir * (strip - 8) * p / peak));
+    g.lineTo(X(m.t_dur), y0);
+    g.closePath();
+    g.fillStyle = colour; g.globalAlpha = 0.25; g.fill();
+    g.globalAlpha = 1; g.strokeStyle = colour; g.lineWidth = 1.5; g.stroke();
+  };
+  density(m.top, Y(m.bound), 1, col("--good"));
+  density(m.bottom, Y(-m.bound), -1, col("--bad"));
+
+  // Sample paths, as far as the clock has got.
+  g.lineWidth = 1;
+  let go = 0, no = 0;
+  for (const p of paths) {
+    g.beginPath();
+    let last = null;
+    for (const [t, x] of p.pts) {
+      if (t > now) break;
+      last = [t, x];
+      g.lineTo(X(t), Y(x));
+    }
+    g.strokeStyle = col("--muted"); g.globalAlpha = 0.35; g.stroke(); g.globalAlpha = 1;
+    if (last && p.side && p.end <= now) {
+      p.side > 0 ? go++ : no++;
+      g.fillStyle = p.side > 0 ? col("--good") : col("--bad");
+      g.beginPath(); g.arc(X(p.end), Y(p.side * m.bound), 2.5, 0, 2 * Math.PI); g.fill();
+    }
+  }
+
+  // Mean drift from the start point.
+  const tHit = m.drift === 0 ? Infinity : m.t0 + m.bound / Math.abs(m.drift);
+  const tEnd = Math.min(tHit, m.t_dur);
+  g.setLineDash([6, 5]); g.strokeStyle = col("--ink"); g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(X(m.t0), Y(0)); g.lineTo(X(tEnd), Y(m.drift * (tEnd - m.t0))); g.stroke();
+  g.setLineDash([]);
+
+  // Bounds, start line and axis.
+  g.strokeStyle = col("--ink"); g.lineWidth = 2;
+  for (const b of [m.bound, -m.bound]) { g.beginPath(); g.moveTo(X(0), Y(b)); g.lineTo(X(m.t_dur), Y(b)); g.stroke(); }
+  g.lineWidth = 1; g.setLineDash([2, 4]);
+  g.beginPath(); g.moveTo(X(0), Y(0)); g.lineTo(X(m.t_dur), Y(0)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = col("--muted"); g.textAlign = "center";
+  for (let t = 0; t <= m.t_dur; t++) g.fillText(t + "s", X(t), H - 6);
+  g.textAlign = "right";
+  g.fillText("+" + m.bound, L - 6, Y(m.bound) + 4);
+  g.fillText("0", L - 6, Y(0) + 4);
+  g.fillText("\u2212" + m.bound, L - 6, Y(-m.bound) + 4);
+  g.textAlign = "left";
+  g.fillStyle = col("--good"); g.fillText(m.yes + "  " + (100 * m.p_go).toFixed(0) + "%", X(0) + 4, Y(m.bound) - strip + 12);
+  g.fillStyle = col("--bad"); g.fillText(m.no + "  " + (100 * m.p_no).toFixed(0) + "%", X(0) + 4, Y(-m.bound) + strip - 4);
+  g.fillStyle = col("--muted"); g.textAlign = "right";
+  g.fillText(`paths decided: ${go} / ${no} of ${paths.length}`, X(m.t_dur), Y(0) - 6);
+
+  // The person's clock, and their choice once made.
+  g.strokeStyle = col("--accent"); g.lineWidth = 2;
+  g.beginPath(); g.moveTo(X(now), top - strip + 4); g.lineTo(X(now), bot + strip - 4); g.stroke();
+  if (m.go !== null) {
+    const y = m.rt > m.t_dur ? Y(0) : Y(m.go ? m.bound : -m.bound);
+    g.fillStyle = col("--accent");
+    g.beginPath(); g.arc(X(m.rt), y, 6, 0, 2 * Math.PI); g.fill();
+    g.textAlign = m.rt > m.t_dur / 2 ? "right" : "left";
+    g.fillText("you", X(m.rt) + (m.rt > m.t_dur / 2 ? -10 : 10), y - 8);
+  }
+
+  if (m.go === null && screen === "decision" && now < m.t_dur) ddmFrame = requestAnimationFrame(drawModel);
+}
+
+// Beside the task, for a player with dev stuff who ticked the box. Remembered per browser.
+function showDdmCard(allowed) {
+  const on = allowed && showDdm.checked;
+  ddmCard.hidden = !on;
+  document.getElementById("stage").classList.toggle("with-ddm", on);
+  if (on && !ddmFrame) ddmFrame = requestAnimationFrame(drawModel);
+}
+showDdm.checked = store.get("temporal-show-ddm") === "1";
+showDdm.addEventListener("change", () => {
+  store.set("temporal-show-ddm", showDdm.checked ? "1" : "0");
+  showDdm.blur();
+  showDdmCard(!panel.hidden);
+});
+window.addEventListener("resize", () => { if (!ddmFrame) ddmFrame = requestAnimationFrame(drawModel); });
 
 for (const input of panel.querySelectorAll("[data-set]")) {
   input.addEventListener("change", async () => {

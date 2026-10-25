@@ -12,6 +12,7 @@ from tkinter import ttk
 import pandas as pd
 
 from ..model.persistence import attempts_to_frame
+from .live import Paths, model_view
 from .session import MIN_FIT_ROWS, Session, fit_summary
 
 BIG = ("Helvetica", 26)
@@ -25,6 +26,7 @@ class DesktopApp(Session):
         root.title("initiation model -- human version")
         root.geometry("880x800")
         root.minsize(880, 800)
+        self.live = None  # the live model window, when open
         super().__init__(root, **kw)
 
     def make_var(self, value):
@@ -95,6 +97,7 @@ class DesktopApp(Session):
         self.fit_button = ttk.Button(right, text="fit my parameters", command=self.run_fit)
         self.fit_button.pack(anchor="w", pady=6)
         ttk.Button(right, text="export all decisions to csv", command=self.export).pack(anchor="w")
+        ttk.Button(right, text="live model view", command=self.open_live).pack(anchor="w", pady=6)
 
     def refresh_stats(self):
         self.stats.config(text=self.stats_text())
@@ -127,11 +130,15 @@ class DesktopApp(Session):
                 return
             done.append(True)
             on_done(go, time.perf_counter() - start)
+            if self.live and not self.closed:
+                self.live.draw()
 
         ttk.Button(row, text=f"1  {yes_label}", command=lambda: finish(1)).pack(side="left", padx=8)
         ttk.Button(row, text=f"2  {no_label}", command=lambda: finish(0)).pack(side="left", padx=8)
         self.root.bind("1", lambda e: finish(1))
         self.root.bind("2", lambda e: finish(0))
+        if self.live:
+            self.live.follow(start)
 
     def render_problem(self, text, header):
         ttk.Label(self.left, text="   ".join(header), font=SMALL).grid(row=0, column=0, pady=(20, 0))
@@ -176,11 +183,155 @@ class DesktopApp(Session):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def open_live(self):
+        if self.live:
+            self.live.top.lift()
+            return
+        self.live = LiveView(self)
+        if self.screen in ("start", "redo"):
+            self.live.follow(self.prompt_at)
+        else:
+            self.live.draw()
+
     def export(self):
         events = self.store.events()
         path = self.store.root / "decisions.csv"
         pd.json_normalize(events).to_csv(path, index=False)
         self.fit_label.config(text=f"wrote data/{path.name}\n{len(events)} events")
+
+
+# The accumulator for the decision on screen, in its own window: bounds, mean drift,
+# predicted RT densities, and sample paths run on the person's clock.
+class LiveView:
+    W, H = 640, 400
+    L, R, STRIP = 46, 14, 56
+    GO, NO, INK, MUTED, CLOCK = "#2e7d4f", "#b23a3a", "#1d1d1b", "#9b9a93", "#2f5d8a"
+
+    def __init__(self, app):
+        self.app = app
+        self.top = tk.Toplevel(app.root)
+        self.top.title("the accumulator, live")
+        self.text = ttk.Label(self.top, font=MONO, justify="left", padding=(10, 8))
+        self.text.pack(anchor="w")
+        self.canvas = tk.Canvas(self.top, width=self.W, height=self.H, bg="white",
+                                highlightthickness=0)
+        self.canvas.pack(padx=10, pady=(0, 10))
+        self.top.protocol("WM_DELETE_WINDOW", self.close)
+        self.decision = self.view = self.paths = None
+        self.started = None
+        self._timer = None
+
+    def close(self):
+        if self._timer:
+            self.app.root.after_cancel(self._timer)
+        self.top.destroy()
+        self.app.live = None
+
+    # A decision has just been put on screen at `start` (perf_counter): run its paths.
+    def follow(self, start):
+        if self._timer:
+            self.app.root.after_cancel(self._timer)
+        self.started = start
+        self._new(self.app.decision_now)
+        self.tick()
+
+    def _new(self, decision):
+        self.decision = decision
+        self.view = model_view(self.app, decision)
+        self.paths = Paths(self.view)
+
+    def tick(self):
+        self._timer = None
+        self.draw()
+        now = time.perf_counter() - self.started
+        if self.app.decision_now.get("go") is None and now < self.view["t_dur"]:
+            self._timer = self.app.root.after(33, self.tick)
+
+    def draw(self):
+        d = self.app.decision_now
+        if d is None:
+            self.text.config(text="no decision yet")
+            return
+        if d is not self.decision:
+            self.started = None
+            self._new(d)
+        v = {**self.view, "go": d["go"], "rt": d["rt"]}
+        now = v["rt"] if v["go"] is not None else (
+            time.perf_counter() - self.started if self.started else 0.0)
+        now = min(now, v["t_dur"])
+        self.paths.step_to(now)
+        self._text(v)
+        self._plot(v, now)
+
+    def _text(self, v):
+        pct = lambda x: f"{x:.0%}"  # noqa: E731
+        label = "start the next set" if v["node"] == "start" else "redo the miss"
+        you = ("deciding..." if v["go"] is None else
+               f"you: {v['yes'] if v['go'] else v['no']} at {v['rt']:.2f}s"
+               + (" (past the deadline: undecided to the fit)" if v["rt"] > v["t_dur"] else ""))
+        self.text.config(text="\n".join([
+            f"{label}:  value {v['value']:.2f}  cost {v['cost']:.2f}",
+            f"f {v['f']:.2f}  k {v['k']:.2f}  T0 {v['t0']:.2f}s  ->  drift {v['drift']:.2f}",
+            f"predicted: {v['yes']} {pct(v['p_go'])}  {v['no']} {pct(v['p_no'])}  "
+            f"undecided by {v['t_dur']:.0f}s {pct(v['p_undecided'])}",
+            you, v["note"]]))
+
+    def _plot(self, v, now):
+        c = self.canvas
+        c.delete("all")
+        W, H, L, R, strip = self.W, self.H, self.L, self.R, self.STRIP
+        top, bot = 6 + strip, H - 22 - strip
+        b, T = v["bound"], v["t_dur"]
+        X = lambda t: L + (W - L - R) * min(t, T) / T  # noqa: E731
+        Y = lambda x: top + (bot - top) * (b - x) / (2 * b)  # noqa: E731
+
+        c.create_rectangle(X(0), top, X(v["t0"]), bot, fill="#eeede8", width=0)
+
+        peak = max(max(v["top"]), max(v["bottom"]), 1e-9)
+        for pdf, y0, sign, colour in ((v["top"], Y(b), 1, self.GO), (v["bottom"], Y(-b), -1, self.NO)):
+            pts = [X(0), y0]
+            for i, p in enumerate(pdf):
+                pts += [X((i + 0.5) * v["bin"]), y0 - sign * (strip - 8) * p / peak]
+            pts += [X(T), y0]
+            c.create_polygon(pts, fill=colour, stipple="gray25", outline=colour, width=1.5)
+
+        for trace, end in zip(self.paths.trace, self.paths.ended):
+            pts = [xy for t, x in trace if t <= now for xy in (X(t), Y(x))]
+            if len(pts) >= 4:
+                c.create_line(pts, fill=self.MUTED)
+            if end is not None and end[0] <= now:
+                x, y = X(end[0]), Y(end[1] * b)
+                c.create_oval(x - 2.5, y - 2.5, x + 2.5, y + 2.5, width=0,
+                              fill=self.GO if end[1] > 0 else self.NO)
+
+        t_hit = v["t0"] + b / abs(v["drift"]) if v["drift"] else float("inf")
+        t_end = min(t_hit, T)
+        c.create_line(X(v["t0"]), Y(0), X(t_end), Y(v["drift"] * (t_end - v["t0"])),
+                      fill=self.INK, dash=(6, 5), width=1.5)
+
+        for y in (b, -b):
+            c.create_line(X(0), Y(y), X(T), Y(y), fill=self.INK, width=2)
+        c.create_line(X(0), Y(0), X(T), Y(0), fill=self.INK, dash=(2, 4))
+        for t in range(int(T) + 1):
+            c.create_text(X(t), H - 8, text=f"{t}s", fill=self.MUTED, font=SMALL)
+        for y, s in ((b, f"+{b}"), (0, "0"), (-b, f"\u2212{b}")):
+            c.create_text(L - 6, Y(y), text=s, anchor="e", fill=self.MUTED, font=SMALL)
+        c.create_text(X(0) + 4, Y(b) - strip + 10, anchor="w", fill=self.GO, font=SMALL,
+                      text=f"{v['yes']}  {v['p_go']:.0%}")
+        c.create_text(X(0) + 4, Y(-b) + strip - 8, anchor="w", fill=self.NO, font=SMALL,
+                      text=f"{v['no']}  {v['p_no']:.0%}")
+        go, no = self.paths.decided()
+        c.create_text(X(T), Y(0) - 8, anchor="e", fill=self.MUTED, font=SMALL,
+                      text=f"paths decided: {go} / {no} of {self.paths.n}")
+
+        c.create_line(X(now), top - strip + 4, X(now), bot + strip - 4, fill=self.CLOCK, width=2)
+        if v["go"] is not None:
+            x = X(v["rt"])
+            y = Y(0) if v["rt"] > T else Y(b if v["go"] else -b)
+            c.create_oval(x - 6, y - 6, x + 6, y + 6, fill=self.CLOCK, width=0)
+            right = v["rt"] > T / 2
+            c.create_text(x + (-10 if right else 10), y - 10, text="you", fill=self.CLOCK,
+                          anchor="e" if right else "w", font=SMALL)
 
 
 def main():

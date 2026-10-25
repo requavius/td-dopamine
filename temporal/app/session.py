@@ -144,6 +144,7 @@ class Session:
         self.launched_at = time.time()
         self.closed = False
         self.fit_result = "not fitted yet"
+        self.decision_now = None  # the last start or redo prompt, for the live model view
 
         self.controller = None
         self.controller_status = "off"
@@ -538,7 +539,7 @@ class Session:
             else:
                 self.advance()
 
-        self.ask_decision("try this one again?", "repeat it", "move on", done)
+        self.decide_on("stage", value, cost, "try this one again?", "repeat it", "move on", done)
 
     # Move to the next slot.
     def advance(self):
@@ -606,7 +607,20 @@ class Session:
             else:
                 self.start_episode()
 
-        self.ask_decision("start the next set?", "start the next set", "I'm done", done)
+        self.decide_on("start", value, base + effort, "start the next set?",
+                       "start the next set", "I'm done", done)
+
+    # Put a decision on screen, keeping its conditions and outcome for the live model view.
+    def decide_on(self, node, value, cost, prompt, yes_label, no_label, on_done):
+        now = self.decision_now = {"node": node, "value": snap_value(value),
+                                   "cost": snap_cost(cost), "prompt": prompt,
+                                   "yes": yes_label, "no": no_label, "go": None, "rt": None}
+
+        def done(go, rt):
+            now.update(go=go, rt=rt)
+            on_done(go, rt)
+
+        self.ask_decision(prompt, yes_label, no_label, done)
 
     # ------------------------------------------------------------ owed questions
 

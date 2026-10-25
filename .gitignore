@@ -4,7 +4,10 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 
-
 data/
 
 private/
+
+paper/figures/
+
+*.log
