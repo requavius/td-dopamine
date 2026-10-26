@@ -1,8 +1,9 @@
 """Paper Figure 8: how fast each way of choosing settings measures k, and why (the spread of
 cost each collects). Figure S5 adds f and what each costs in engagement. Both from
 results/controllers (`python -m experiments.controllers`). The 32
-people of the 4 x 4 grid x 2 seeds, question-type task, skips on, 300 start decisions, true
-f and k hidden; gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s. Error
+people of the 4 x 4 grid x 2 seeds, question-type task, skips on, 300 ticks (start
+decisions in a session, or chances to come back while away), true f and k hidden; V4,
+gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s. Error
 bars are 2 SE over the 32 people (bootstrap for RMSE).
 
     python -m paper fig8 figS5
@@ -70,7 +71,7 @@ def _draw(df, ax, cx, bx=None, dx=None):
                  [rmse_se(e) for e in errs], LABELS[arm])
         axis.axhline(0.05, color="black", lw=1.0, ls=":")
         axis.set_xticks(CHECKPOINTS)
-        axis.set_xlabel("Start decisions")
+        axis.set_xlabel("Ticks")
         axis.set_ylabel(f"${p}$ RMSE")
         axis.set_ylim(bottom=0)
     # (c) why: how much cost varied in the data each arm collected
@@ -79,10 +80,10 @@ def _draw(df, ax, cx, bx=None, dx=None):
         line(cx, j, arm, [d[f"csd_{n}"].mean() for n in CHECKPOINTS],
              [se(d[f"csd_{n}"]) for n in CHECKPOINTS])
     cx.set_xticks(CHECKPOINTS)
-    cx.set_xlabel("Start decisions")
+    cx.set_xlabel("Ticks")
     cx.set_ylabel("Spread of cost (sd)")
     cx.set_ylim(bottom=0)
-    # (d) what it cost: engagement in each block of 100 start decisions
+    # (d) what it cost: engagement in each block of 100 ticks
     if dx is not None:
         for j, arm in enumerate(ORDER):
             d = df[df.arm == arm]
@@ -90,7 +91,7 @@ def _draw(df, ax, cx, bx=None, dx=None):
                  [se(d[f"pgo_{n}"]) for n in CHECKPOINTS])
         dx.set_xticks(CHECKPOINTS)
         dx.set_xticklabels(["1-100", "101-200", "201-300"])
-        dx.set_xlabel("Start decisions (block)")
+        dx.set_xlabel("Ticks (block)")
         dx.set_ylabel("P(start next set)")
         dx.set_ylim(0, 1)
     handles, labels = ax.get_legend_handles_labels()

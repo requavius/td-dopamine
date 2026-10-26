@@ -1,22 +1,24 @@
 """Measuring against planning for reward: six ways of choosing settings, on the same people.
 
 The 32 simulated people of the 4 x 4 grid of f, k in {0.2, 0.6, 1.0, 1.5}, 2 seeds each,
-question-type task, skips on, 300 start decisions, true f and k hidden from every planner.
-Current model: gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
+question-type task, skips on, 300 ticks (a tick is a start decision in a session, or a
+chance to come back while away; a person who stops more gives fewer decisions), true f and
+k hidden from every planner. Current model (V4): gamma 0.9, ACHIEVEMENT_SCALE 4,
+continuing bootstrap, T_DUR 7.0 s.
 
 Arms:
     fixed             the default setting throughout
-    random            a random setting every 25 decisions, from the 84 scheduled-review settings
+    random            a random setting every 25 start decisions, from the 84 scheduled-review settings
     random_redo       the same over all 96 (redo-prompt settings included)
     reward_scheduled  reward planning over the 84 (the app's controller until 2026-10-11)
     reward            reward planning over all 96
     information       InfoController over all 96 (the app's controller)
 
-Each run records, at 100, 200 and 300 start decisions: f and k fitted from the start
-decisions so far and the redo decisions before them, the spread (sd) of cost in that data,
-and the reward and P(start next set) of the block of 100 just ended.
+Each run records, at 100, 200 and 300 ticks: f and k fitted from the start and redo
+decisions recorded so far, the spread (sd) of cost in that data, and the reward and
+P(start next set) of the block of 100 ticks just ended.
 
-Pass conditions, fixed before the run (paired on person and seed, at 300 decisions):
+Pass conditions, fixed before the run (paired on person and seed, at the end of the run):
   P1  squared error in k, information - reward, is below zero by more than twice its
       standard error, and squared error in f is not above zero by more than twice its.
   P2  reward, information - fixed, is above zero by more than twice its standard error.
@@ -68,30 +70,33 @@ def _one(task):
     reward_at = {}
 
     def mark(sim):
-        n = len(sim.state.initiation_passages)
+        n = sim.state.t - 1  # ticks so far; the first set is free
         if n in CHECKPOINTS:
             reward_at.setdefault(n, sim.state.total_reward)
 
     with Quiet():
-        sim = run(UserParams(f=f, k=k), controller=ctl, env=Environment(), n_decisions=N,
+        sim = run(UserParams(f=f, k=k), controller=ctl, env=Environment(), n_ticks=N,
                   seed=seed, each=mark)
         starts, redos = sim.state.initiation_passages, sim.state.first_passage
-        go = [p["GO"] == 1 for p in starts[:N]]
         log = ctl.log if ctl else []
         out = dict(arm=arm, f_true=f, k_true=k, seed=seed, reward=sim.state.total_reward,
-                   sets=sim.state.episodes, p_go=float(np.mean([p["GO"] == 1 for p in starts])),
+                   sets=sim.state.episodes, decisions=len(starts), away=sim.state.away / N,
+                   p_go=float(np.mean([p["chose"] == 1 for p in starts])),
                    redo_prompts=len(redos),
                    redo_share=float(np.mean([u.chosen.redo_prompts for u in log])) if log else 0.0)
         prev = 0.0
         for i, n in enumerate(CHECKPOINTS):
-            upto = starts[n - 1]["timestep"]
-            data = starts[:n] + [r for r in redos if r["timestep"] <= upto]
+            # Everything recorded in the first n ticks. A tick's set runs after it, at n + 1.
+            block = [p for p in starts if p["timestep"] <= n]
+            data = block + [r for r in redos if r["timestep"] <= n + 1]
             out[f"f_{n}"], out[f"k_{n}"] = fit(passages_to_frame(data))
+            out[f"rows_{n}"] = len(data)
             out[f"csd_{n}"] = float(np.std([p["cost"] for p in data]))
             out[f"reward_{n}"] = reward_at[n] - prev
             prev = reward_at[n]
             lo = CHECKPOINTS[i - 1] if i else 0
-            out[f"pgo_{n}"] = float(np.mean(go[lo:n]))
+            go = [p["chose"] == 1 for p in block if p["timestep"] > lo]
+            out[f"pgo_{n}"] = float(np.mean(go)) if go else np.nan
     return out
 
 
@@ -115,23 +120,25 @@ def summarize(res):
         print(f"{arm:>17}: {by[arm].redo_share.mean():.0%} of updates, "
               f"{by[arm].redo_prompts.mean():.0f} redo prompts")
 
-    print("\n== at 300 start decisions (32 people) ==")
-    print(f"{'arm':>17}  f RMSE  k RMSE  reward  P(start)")
+    print(f"\n== after {N} ticks (32 people) ==")
+    print(f"{'arm':>17}  f RMSE  k RMSE  reward  P(start)  decisions  away")
     for arm in ("fixed", "reward_scheduled", "reward", "information"):
         d = by[arm]
         print(f"{arm:>17}  {rmse(d, 'f'):6.3f}  {rmse(d, 'k'):6.3f}  {d.reward.mean():6.1f}  "
-              f"{d.p_go.mean():8.2f}")
+              f"{d.p_go.mean():8.2f}  {d.decisions.mean():9.0f}  {d.away.mean():4.0%}")
 
-    print("\n== over time ==")
-    print(f"{'arm':>17}  k RMSE at 100 / 200 / 300   f RMSE at 100 / 200 / 300   sd of cost at 300")
+    print("\n== over time (ticks) ==")
+    print(f"{'arm':>17}  k RMSE at 100 / 200 / 300   f RMSE at 100 / 200 / 300   sd of cost at 300"
+          "   decisions in the fit at 100 / 200 / 300")
     for arm in ("fixed", "random", "reward_scheduled", "reward", "information"):
         d = by[arm]
         ks = " / ".join(f"{rmse(d, 'k', n):.3f}" for n in CHECKPOINTS)
         fs = " / ".join(f"{rmse(d, 'f', n):.3f}" for n in CHECKPOINTS)
-        print(f"{arm:>17}  {ks:>25}   {fs:>25}   {d.csd_300.mean():.3f}")
+        rows = " / ".join(f"{d[f'rows_{n}'].mean():.0f}" for n in CHECKPOINTS)
+        print(f"{arm:>17}  {ks:>25}   {fs:>25}   {d.csd_300.mean():.3f}   {rows}")
 
     print("\n== block by block ==")
-    print(f"{'arm':>17}  reward 1-100 / 101-200 / 201-300   P(start) 1-100 / 101-200 / 201-300")
+    print(f"{'arm':>17}  reward, ticks 1-100 / 101-200 / 201-300   P(start), the same blocks")
     for arm in ("fixed", "random", "reward_scheduled", "reward", "information"):
         d = by[arm]
         rw = " / ".join(f"{d[f'reward_{n}'].mean():.1f}" for n in CHECKPOINTS)

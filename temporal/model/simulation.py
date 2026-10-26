@@ -1,4 +1,10 @@
-"""The simulated learner: plays sets, decides whether to start and redo, gives up."""
+"""The simulated learner: plays sets, decides whether to start and redo, gives up.
+
+It follows the app's rules for what can be recorded. A session holds at most one "stop":
+saying it ends the session, and the time away until the person comes back (cold) is not
+recorded, because nothing in the app sees it. Time is counted in ticks: one start
+decision in a session, or one chance to come back while away.
+"""
 import random
 
 import numpy as np
@@ -11,7 +17,7 @@ from .persistence import conditions, draw_quit_time, draw_solve_seconds, quit_dr
 from .questions import choose_type
 from .value import ACHIEVEMENT_SCALE, slot_reward, value_of_stage
 
-SESSION_EXIT_STREAK = 3  # consecutive non-GO draws before the learner has left
+MAX_TICKS = 1_000_000  # a safety cap; the lapse mixture keeps every return chance above ~1%
 
 # Who decides whether a missed question comes back: the controller at review_rate per
 # slot (scheduled), the learner at the repeat node (choice), or nobody (quiet).
@@ -116,8 +122,9 @@ class Simulation:
         choice["item"] = item
         choice["episode_id"] = state.episodes + state.abandoned + 1
         choice["timestep"] = state.t
+        choice["slot_delta"] = state.slot_delta  # the error the miss just produced, as the app logs
         state.first_passage.append(choice)
-        return choice["resolved"] == 1
+        return choice["chose"] == 1  # a slow choice is still made
 
     # One episode: exactly `stage_amt` slots, one question each.
     def run_episode(self):
@@ -145,7 +152,7 @@ class Simulation:
             if self.skips and self._gives_up(item, p_item, review):
                 if s == 0 and cold:
                     # Came back, looked at the first question and gave up: that is
-                    # leaving. The set is abandoned and the next start decision is cold.
+                    # leaving. The set is abandoned and they are away again.
                     state.persistence[-1]["left"] = True
                     state.abandoned += 1
                     state.in_session = False
@@ -223,7 +230,6 @@ class Simulation:
         )
         record["episodes_done"] = state.episodes
         record["episode_id"] = state.episodes + state.abandoned + 1
-        record["attempt"] = state.attempts + 1
         record["in_session"] = state.in_session
         record["cost_base"] = base
         record["cost_effort"] = effort
@@ -237,42 +243,52 @@ class Simulation:
         record["timestep"] = state.t
         state.initiation_passages.append(record)
 
-        if record["GO"] != 1:
-            # STAY or timeout: the tick is consumed and nothing is learned. Counted,
-            # never silently skipped.
+        # What they do, even past the deadline; the fit reads a slow choice as undecided.
+        if record["chose"] != 1:
+            # "Stop" ends the session, as "I'm done" closes the app. What follows is
+            # time away until they come back cold, and none of it is recorded.
             state.stuck += 1
-            state.attempts += 1
-            state.stay_streak += 1
-            if state.stay_streak >= SESSION_EXIT_STREAK:
-                state.in_session = False # they closed it: the next decision is a cold start
-                state.stay_streak = 0
+            state.in_session = False
             return False
-
-        self.cold_start = not state.in_session
-        state.in_session = True
-        state.stay_streak = 0
-        state.attempts = 0
         return True
 
-    def run(self, max_decisions=None, max_episodes=None, max_ticks=20000):
+    # Away, a chance to come back, at cold cost. It is not recorded: in the app, not
+    # opening the task leaves no trace, and opening it is a decision whose "RT" is hours.
+    # It costs a tick and is not data. Coming back starts a set cold.
+    def come_back(self):
+        state, p = self.state, self.params
+        base, effort = cost_components(state)
+        draw = initiation_decision(value_at_choice_point(state), base + effort, p.f, p.k, t0=p.t0)
+        state.away += 1
+        if draw["chose"] != 1:
+            return False
+        state.in_session = True
+        self.cold_start = True
+        return True
+
+    # One tick: a recorded start decision in a session, or a chance to come back when
+    # away. Either way, a GO starts a set.
+    def tick(self):
+        went = self.initiate() if self.state.in_session else self.come_back()
+        self.state.t += 1
+        if went:
+            self.run_episode()
+        return went
+
+    def run(self, max_decisions=None, max_episodes=None, max_ticks=MAX_TICKS):
         state = self.state
 
         # The learner is already in the task; the first episode is not gated.
-        self.run_episode()
         state.in_session = True
+        self.run_episode()
 
         while True:
-            self.initiate()
-            state.t += 1
-
+            self.tick()
             if max_decisions is not None and len(state.initiation_passages) >= max_decisions:
                 break
             if max_episodes is not None and state.episodes >= max_episodes:
                 break
             if state.t >= max_ticks:
                 break
-
-            if state.initiation_passages[-1]["GO"] == 1:
-                self.run_episode()
 
         return state

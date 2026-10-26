@@ -12,6 +12,7 @@ T_DUR = 7.0  # deadline in seconds; past it a decision is undecided. Re-check: `
 
 DX = 0.005
 DT = 0.005
+LAPSE_MIX = 0.02  # pyddm's uniform lapse mixture, its default; stated so _sampler can undo it
 
 # Conditions are snapped to these steps so repeated draws hit _SOLUTION_CACHE.
 VALUE_STEP = 0.05
@@ -34,6 +35,7 @@ def build_model(parameters, nondecision=0):
         bound=BOUND,
         starting_position=0,
         nondecision=nondecision,
+        mixture_coef=LAPSE_MIX,
         T_dur=T_DUR,
         dx=DX,
         dt=DT,
@@ -83,7 +85,8 @@ def solution(f_val, k_val, value, cost, t0=0.0):
 
 
 # pyddm's Solution.sample(1), with its tables built once per condition. It draws from
-# numpy's global generator in the same calls and order, so a seeded run is unchanged.
+# numpy's global generator in the same calls and order, plus one uniform on an undecided
+# draw for where the person ends up (_upper_after_deadline).
 def _sampler(key):
     if key not in _SAMPLER_CACHE:
         sol = solution(*key)
@@ -95,30 +98,55 @@ def _sampler(key):
         shift = np.max(t) + 1  # lower-bound times sit past the upper ones
         domain = np.array(list(t) + list(t + shift) + [-1])
         probs = np.array(list(upper * sol.dt) + list(lower * sol.dt) + [sol.prob_undecided()])
-        _SAMPLER_CACHE[key] = (domain, probs, shift, sol.dt)
+        drift = initiation_drift(key[2], key[3], key[0], key[1])
+        _SAMPLER_CACHE[key] = (domain, probs, shift, sol.dt, _upper_after_deadline(sol, drift))
     return _SAMPLER_CACHE[key]
 
 
-# (GO, RT) from one draw: GO 1 upper, 0 lower, None undecided by T_DUR.
+# P(upper first, from 0) for a diffusion that runs on with no deadline.
+def _upper_eventually(drift):
+    a = 2.0 * drift / SIGMA**2
+    if abs(a) < 1e-9:
+        return 0.5
+    if a > 0:
+        return float(-np.expm1(-a * BOUND) / -np.expm1(-2.0 * a * BOUND))
+    return float(np.exp(a * BOUND) * -np.expm1(a * BOUND) / -np.expm1(2.0 * a * BOUND))
+
+
+# P(upper | no bound by T_DUR): where an undecided decision ends up if the person keeps
+# deliberating, as a person at a prompt with no deadline does. From
+# P(upper eventually) = P(upper by T_DUR) + P(undecided) * P(upper | undecided), with the
+# lapse overlay taken back out of the solution (it scales both by 1 - LAPSE_MIX).
+def _upper_after_deadline(sol, drift):
+    undecided = sol.prob_undecided() / (1 - LAPSE_MIX)
+    if undecided < 1e-12:
+        return 0.5  # no draw can land here
+    upper = (sol.prob("upper") - LAPSE_MIX / 2) / (1 - LAPSE_MIX)
+    return float(np.clip((_upper_eventually(drift) - upper) / undecided, 0.0, 1.0))
+
+
+# (GO, RT, chose) from one draw: GO 1 upper, 0 lower, None undecided by T_DUR. `chose`
+# is the choice the person makes: GO when decided, and for an undecided draw the bound
+# the diffusion reaches after the deadline. The fit sees only GO and RT.
 def _draw(f_val, k_val, value, cost, t0):
-    domain, probs, shift, dt = _sampler((f_val, k_val, value, cost, t0))
+    domain, probs, shift, dt, after = _sampler((f_val, k_val, value, cost, t0))
     samp = np.random.choice(domain, p=probs, replace=True, size=1)
     samp = samp[samp != -1]
     samp += np.random.uniform(0, dt, len(samp))  # each point stands for [x, x + dt)
     if len(samp) == 0:
-        return None, None
+        return None, None, int(np.random.random() < after)
     if samp[0] < shift:
-        return 1, float(samp[0])
-    return 0, float(samp[0] - shift)
+        return 1, float(samp[0]), 1
+    return 0, float(samp[0] - shift), 0
 
 
 # Start the next set: upper = GO (took the effortful option), lower = STAY.
 def initiation_decision(value, cost, f_val, k_val, t0=0.0):
     value = snap_value(value)
     cost = snap_cost(cost)
-    go, rt = _draw(f_val, k_val, value, cost, t0)
+    go, rt, chose = _draw(f_val, k_val, value, cost, t0)
 
-    return {"value": value, "cost": float(cost), "GO": go, "RT": rt}
+    return {"value": value, "cost": float(cost), "GO": go, "RT": rt, "chose": chose}
 
 
 # Redo a miss: upper = REPEAT, lower = CONTINUE. The same accumulator as
@@ -126,6 +154,4 @@ def initiation_decision(value, cost, f_val, k_val, t0=0.0):
 def stage_decision(value, cost, f_val, k_val, t0=0.0):
     record = initiation_decision(value, cost, f_val, k_val, t0=t0)
     record["node"] = "stage"
-    # Ran out of deliberation: did not repeat.
-    record["resolved"] = 0 if record["GO"] is None else record["GO"]
     return record

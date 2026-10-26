@@ -13,7 +13,7 @@ from .model.accumulator import build_model
 from .model.params import REENTRY_COST_HIGH, REENTRY_COST_LOW, REENTRY_COST_MID, UserParams
 from .model.persistence import attempts_to_frame, fit_patience, fit_persistence
 from .model.simulation import Simulation
-from .plots import ASSETS, plot_recovery
+from .plots import ASSETS, plot_recovery, recovery_stats
 
 # Crossed 2x2: value and cost vary orthogonally, which is what separates f from k.
 DESIGN = [(v, c) for v in (0.3, 1.0) for c in (0.3, 1.0)]
@@ -55,6 +55,8 @@ def simulate_dataset(f_true, k_true, design=DESIGN, n_per_cell=200):
     return df
 
 
+# Two learners at different cold-start costs, pooled. The costs no longer reach the data
+# (no recorded decision is cold), so this is two trajectories rather than a cost contrast.
 def collect_coupled(f_true, k_true, n_decisions=700, cost_profiles=None,
                     review_mode="scheduled", review_rate=0.25, diff_spread=0.0):
     if cost_profiles is None:
@@ -70,8 +72,8 @@ def collect_coupled(f_true, k_true, n_decisions=700, cost_profiles=None,
 
     return passages_to_frame(passages)
 
-# One learner, one cold-start cost. The cost contrast comes from within the run: it swings
-# warm-to-cold as sessions start and end, and moves with each episode's review load.
+# One learner, one cold-start cost. Every recorded start decision is warm, so cost moves
+# only with the last set's review load; the cold-start cost sets how long they stay away.
 def collect_single(f_true, k_true, n_decisions=1200, reentry_cost=REENTRY_COST_MID,
                    include_stage=True, review_mode="scheduled", review_rate=0.25,
                    diff_spread=0.0, t0=0.0):
@@ -147,7 +149,8 @@ def _sweep(grid, reps, generate, out_path, title):
         )
 
     res = pd.DataFrame(records, columns=["f_true", "k_true", "f_hat", "k_hat"])
-    res.attrs["stats"] = plot_recovery(res, out_path, title=title, reps=reps)
+    res.attrs["stats"] = (plot_recovery(res, out_path, title=title, reps=reps) if out_path
+                          else recovery_stats(res))
     return res
 
 
@@ -156,7 +159,7 @@ def recovery(grid, reps=5, n_per_cell=400, out_path=None):
         grid,
         reps,
         lambda f, k: simulate_dataset(f, k, DESIGN, n_per_cell),
-        Path(out_path) if out_path else ASSETS / "initiation_recovery.png",
+        out_path,
         "Initiation DDM parameter recovery",
     )
 
@@ -166,7 +169,7 @@ def recovery_single(grid, reps=5, n_decisions=1200, out_path=None):
         grid,
         reps,
         lambda f, k: collect_single(f, k, n_decisions),
-        Path(out_path) if out_path else ASSETS / "initiation_recovery_single.png",
+        out_path,
         "Initiation DDM parameter recovery (one learner, endogenous cost)",
     )
 
@@ -176,7 +179,7 @@ def recovery_reseeded(grid, reps=5, n_decisions=1200, out_path=None):
         grid,
         reps,
         lambda f, k: collect_reseeded(f, k, n_decisions),
-        Path(out_path) if out_path else ASSETS / "initiation_recovery_reseeded.png",
+        out_path,
         "Initiation DDM parameter recovery (one person, four points on the learning curve)",
     )
 

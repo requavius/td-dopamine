@@ -1,8 +1,8 @@
 """Paper Figures 7 (which difficulty keeps a person engaged, and what showing feedback does,
 five people) and S4 (the same for f = k = 0.8 with 96 paired seeds), from
 results/task_choice (`python -m experiments.task_choice`). Question-type task, one setting
-held for each run of 300 start decisions, review 0.25, skipped questions dropped, no
-controller; gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s. Error bars
+held for each run of 300 ticks, review 0.25, skipped questions dropped, no controller; V4,
+gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s. Error bars
 are 2 SE over seeds.
 
     python -m paper fig7 figS4

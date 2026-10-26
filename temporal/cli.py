@@ -42,14 +42,15 @@ def run_experiment(params: UserParams, cost=None, max_decisions=200, debug=False
     passages = pd.DataFrame(state.initiation_passages)
     stages = pd.DataFrame(state.first_passage)
     go_rate = (passages["GO"] == 1).mean() if len(passages) else float("nan")
-    repeat_rate = stages["resolved"].mean() if len(stages) else float("nan")
+    repeat_rate = (stages["chose"] == 1).mean() if len(stages) else float("nan")
 
     if debug:
         print(f"true params: f={params.f:.3f} k={params.k:.3f}")
         print(f"cold-start cost: {state.reentry_cost} (warm decisions cost far less)")
         print(f"cost actually faced: {passages['cost'].min():.2f}-{passages['cost'].max():.2f} "
-              f"(sd {passages['cost'].std():.3f}), in-session on {passages['in_session'].mean():.0%} of decisions")
-        print(f"ticks={state.t} episodes={state.episodes} stuck={state.stuck}")
+              f"(sd {passages['cost'].std():.3f})")
+        print(f"ticks={state.t} away={state.away} (not recorded) episodes={state.episodes} "
+              f"sessions ended by a stop={state.stuck}")
         print(f"review: mode={review_mode} rate={review_rate}, "
               f"{passages['last_review_load'].mean():.0%} of slots on average, "
               f"{passages['last_episode_passed'].mean():.0%} of questions right")
@@ -70,6 +71,7 @@ def run_experiment(params: UserParams, cost=None, max_decisions=200, debug=False
         "reentry_cost": state.reentry_cost,
         "abandoned": state.abandoned,
         "ticks": state.t,
+        "away": state.away,
         "episodes": state.episodes,
         "stuck": state.stuck,
         "decisions": len(passages),
@@ -233,10 +235,10 @@ def build_parser():
                        choices=("single", "coupled", "uncoupled", "persistence",
                                 "patience", "reseeded", "t0", "all"),
                        default="single",
-                       help="single: one learner, cost contrast from its own "
-                            "sessions and review load (default). "
-                            "coupled: two learners pooled at different cold-start "
-                            "costs. uncoupled: value as a fixed design constant. "
+                       help="single: one learner, its own warm start decisions "
+                            "(default). coupled: two learners at different cold-start "
+                            "costs, pooled (writes the README's recovery plot). "
+                            "uncoupled: value and cost set by design. "
                             "persistence: f and k from decisions, from "
                             "answer and skip times, and from both, on "
                             "human-sized data. patience: how quickly someone "

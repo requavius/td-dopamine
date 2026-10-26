@@ -4,7 +4,7 @@ One simulated person per dataset, mid cold-start cost, scheduled review, 1200 re
 decisions split across four learners after 0, 200, 500 and 1000 warm-up decisions
 (`recovery.collect_reseeded`), single-diff task, 4 x 4 grid x 3 reps (48 fits), seeded per
 grid point and rep. Each dataset is fitted twice: timed-out trials kept as undecided (the
-pipeline) and dropped. Current model: gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap,
+pipeline) and dropped. Current model (V4): gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap,
 T_DUR 7.0 s, T0 pinned at 0.
 
 README: "Recovery from one person" and "Censored trials are data". Paper Figures 4 and S2.

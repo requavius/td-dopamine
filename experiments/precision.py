@@ -4,10 +4,11 @@ Expected standard deviation of f and k from 300 start decisions (and the redo de
 among them): sqrt(diag(I^-1)), with I the Fisher information of the decisions
 (`controller.fisher`) at the true f and k. The 16 people of the 4 x 4 grid x 2 seeds,
 question-type task, one run each with the default setting (start decisions only) and one
-with a fixed redo-prompt setting (starts and redos). Warm-only designs keep the in-session
-starts and scale their information to 300 start decisions, as a person in the app gives
-(the fit never sees a cold start from a human). Current model: gamma 0.9,
-ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
+with a fixed redo-prompt setting (starts and redos), each until 300 start decisions are
+recorded. Every recorded start is warm, as in the app: a stop ends the session and the
+cold start on coming back is never recorded. Until 2026-10-25 the simulator recorded cold
+starts too, and this table compared data with and without them (RETIRED.md, V3).
+Current model (V4): gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
 
 README: the table in "How value and cost together decide what can be measured". Paper
 Figure 6d.
@@ -24,8 +25,7 @@ from temporal.model.params import UserParams
 from .common import LEVELS, args, out_dir, run_pool
 
 OUT = out_dir("precision")
-DESIGNS = (("starts", "start decisions, cold and warm"), ("warm", "start decisions, warm only"),
-           ("starts_redo", "starts and redos, cold and warm"), ("warm_redo", "starts and redos, warm only"))
+DESIGNS = (("starts", "start decisions"), ("starts_redo", "starts and redos"))
 
 
 def _one(task):
@@ -34,13 +34,10 @@ def _one(task):
     redo = run(UserParams(f=f, k=k), env=Environment(0.6, 0.0, True, False, True),
                n_decisions=300, seed=seed).state
     rows = []
-    for name, st, with_redo, warm_only in (("starts", plain, False, False),
-                                           ("warm", plain, False, True),
-                                           ("starts_redo", redo, True, False),
-                                           ("warm_redo", redo, True, True)):
-        starts = [p for p in st.initiation_passages if not warm_only or p["in_session"]]
+    for name, st, with_redo in (("starts", plain, False), ("starts_redo", redo, True)):
+        starts = st.initiation_passages
         data = starts + (st.first_passage if with_redo else [])
-        info = fisher(data, f, k) * (300 / max(len(starts), 1))
+        info = fisher(data, f, k) * (300 / len(starts))
         sd = np.sqrt(np.diag(np.linalg.inv(info)))
         rows.append(dict(design=name, f_true=f, k_true=k, seed=seed, sd_f=sd[0], sd_k=sd[1],
                          starts=len(starts), cost_sd=float(np.std([p["cost"] for p in data]))))

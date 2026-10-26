@@ -141,7 +141,7 @@ def apply(sim, env):
     sim.review_mode = env.review_mode
 
 
-# Total reward earned over `horizon` start decisions in `env`.
+# Total reward earned over `horizon` ticks in `env`. Time away counts against it.
 def rollout(state, params, env, horizon, seed):
     # Starts at a decision point, so not Simulation.run: that grants a free first episode.
     sim = fork(state, params, env)
@@ -150,10 +150,7 @@ def rollout(state, params, env, horizon, seed):
     np.random.seed(seed)
     r0 = st.total_reward
     for _ in range(horizon):
-        went = sim.initiate()
-        st.t += 1
-        if went:
-            sim.run_episode()
+        sim.tick()
     return st.total_reward - r0
 
 
@@ -173,7 +170,7 @@ class Controller:
                  explore=0.15, min_spacing=25, refit_every=REFIT_EVERY, known=None, seed=0):
         self.env = start
         self.candidates = tuple(candidates)
-        self.horizon = horizon  # screening: start decisions per rollout, cheap
+        self.horizon = horizon  # screening: ticks per rollout, cheap
         self.reps = reps        # screening: rollouts per candidate
         self.confirm_top = confirm_top          # front-runners taken through to the re-test
         self.confirm_horizon = confirm_horizon  # the re-test: long rollouts on fresh seeds,
@@ -247,7 +244,7 @@ class Controller:
                 se = d.std(ddof=1) / np.sqrt(len(d)) if len(d) > 1 else 0.0
                 if d.mean() > max(2 * se, 0.0): # switch only on a margin over the noise
                     chosen = best
-                    reason = (f"+{d.mean():.1f} reward per {self.confirm_horizon} decisions "
+                    reason = (f"+{d.mean():.1f} reward per {self.confirm_horizon} ticks "
                               f"(±{se:.1f})")
                 else:
                     chosen = previous
@@ -338,7 +335,7 @@ class InfoController(Controller):
 
     def __init__(self, horizon=25, safety=0.5, **kw):
         super().__init__(**kw)
-        self.info_horizon = horizon  # start decisions per rollout
+        self.info_horizon = horizon  # ticks per rollout
         self.safety = safety
         self.np_rng = np.random.default_rng(kw.get("seed", 0))
 
@@ -378,10 +375,7 @@ class InfoController(Controller):
                 np.random.seed(seed)
                 e0 = sim.state.episodes
                 for _ in range(self.info_horizon):
-                    went = sim.initiate()
-                    sim.state.t += 1
-                    if went:
-                        sim.run_episode()
+                    sim.tick()
                 ps = sim.state.initiation_passages + sim.state.first_passage
                 gains.append(logdet(base + fisher(ps, f, k)) - logdet(base))
                 started.append(sim.state.episodes - e0)
@@ -406,10 +400,13 @@ def plan_in_worker(controller, state, params):
 
 # A simulated person, measured the way the interface measures a human: the controller
 # only ever sees the Elo rating built from their answers, never their true difficulty.
-# `each`, if given, is called with the simulation after every start decision (and the set
-# it started), before the controller plans: for recording a run as it goes.
+# It runs until `n_decisions` start decisions are recorded, or with `n_ticks` for that
+# many ticks: a fixed amount of time, in which a person who stops more is away more and
+# gives fewer decisions. `each`, if given, is called with the simulation after every tick
+# (and the set it started), before the controller plans: for recording a run as it goes.
 def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
-        reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True, each=None):
+        reentry_cost=0.6, type_diffs=None, ability=0.0, spread=1.0, skips=True, each=None,
+        n_ticks=None):
     random.seed(seed)
     np.random.seed(seed)
     start = controller.env if controller else env
@@ -423,13 +420,11 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
     st.type_diffs = np.array(truth, dtype=float) # hidden from the controller
     st.ability = ability
 
-    sim.run_episode()  # already in the task, as Simulation.run does
     st.in_session = True
-    while len(st.initiation_passages) < n_decisions:
-        went = sim.initiate()
-        st.t += 1
-        if went:
-            sim.run_episode()
+    sim.run_episode()  # already in the task, as Simulation.run does
+    end = None if n_ticks is None else st.t + n_ticks
+    while (st.t < end) if end is not None else (len(st.initiation_passages) < n_decisions):
+        sim.tick()
         if each is not None:
             each(sim)
         if controller is not None and controller.due(st):

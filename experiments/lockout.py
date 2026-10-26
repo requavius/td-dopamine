@@ -1,10 +1,10 @@
 """Does showing feedback protect effort-averse people from lockout?
 
 Lockout: a run in which the person almost never starts again, defined before the run as
-P(start next set) < 0.10 over the run's 300 start decisions. The task of task_choice
-(question-type task, skips on, one setting held for each run, review 0.25, skipped
-questions dropped, no controller). Current model: gamma 0.9, ACHIEVEMENT_SCALE 4,
-continuing bootstrap, T_DUR 7.0 s. Four effort-averse people, targets 75, 60 and 45%,
+P(start next set) < 0.10 over the start decisions recorded in the run (300 ticks). The
+task of task_choice (question-type task, skips on, one setting held for each run, review
+0.25, skipped questions dropped, no controller). Current model (V4): gamma 0.9,
+ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s. Four effort-averse people, targets 75, 60 and 45%,
 feedback shown and hidden, 64 seeds paired across feedback (4000-4063).
 
 Claims, fixed before the run (paired on person, target and seed):
@@ -53,6 +53,12 @@ def summarize(df):
     print("\n== start rate in runs that did not lock out, shown - hidden (no claim) ==")
     alive = df[df.locked == 0].groupby(["f", "k", "feedback"]).p_go.mean().unstack()
     print((alive[True] - alive[False]).round(3).to_string())
+    if "away" in df:
+        print("\n== share of ticks spent away, and start decisions recorded per run (no claim) ==")
+        print(df.groupby(["f", "k", "feedback"])[["away", "decisions"]].mean().round(2).to_string())
+        w = df.pivot_table(index=["f", "k", "target", "seed"], columns="feedback", values="away")
+        d = w[False] - w[True]
+        print(f"away, hidden - shown, pooled: {d.mean():+.3f} ± {se(d):.3f}")
 
 
 if __name__ == "__main__":

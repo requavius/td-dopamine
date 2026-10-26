@@ -1,5 +1,5 @@
 """Paper 5.2: what each part of the fit contributes, alone and in combination, on the
-same data. Current model (V3): gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap,
+same data. Current model (V4): gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap,
 T_DUR 7.0 s, confidence off.
 
 Data: the 32 people of paper 5.4 (4 x 4 grid of f, k in {0.2, 0.6, 1.0, 1.5}, 2 seeds),

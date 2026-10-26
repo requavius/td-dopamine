@@ -192,16 +192,12 @@ def run_app(f, k, settings, seed, n=N_APP):
     st.type_diffs = np.array(synthetic_type_diffs(1.0), dtype=float)
     st.ability = 0.0
 
+    st.in_session = True
     with person():
         sim.run_episode()
-    st.in_session = True
     while len(st.initiation_passages) < n:
         with person():
-            went = sim.initiate()
-        st.t += 1
-        if went:
-            with person():
-                sim.run_episode()
+            sim.tick()
         person.trim()
         if ctl.due(st):
             ctl.plan(analyst_view(sim, ratings), assumed)

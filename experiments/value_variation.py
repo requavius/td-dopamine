@@ -3,7 +3,7 @@
 At a start decision value = V(0) + the last set's prediction error, carried at weight 1
 (`conditions.value_at_choice_point`). From each start decision's record, the carried error
 is `carried_delta(last_set_delta)` and V(0) is the recorded value minus it (value is
-recorded snapped to 0.05). Question-type task (`controller.run`), skips on. Current model:
+recorded snapped to 0.05). Question-type task (`controller.run`), skips on. Current model (V4):
 gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
 
     probed  the four people of the persistence test, 2 seeds, 700 start decisions,
@@ -14,7 +14,7 @@ gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
 
 Reported without a claim. "Share of value's sd from the error" is sd(error) / sd(value).
 
-README: "Prediction error is most of the variation in value" and the carry table under
+README: "Prediction error is a large part of the variation in value" and the carry table under
 "How value and cost together decide what can be measured".
 
     python -m experiments.value_variation            # run, then summarize

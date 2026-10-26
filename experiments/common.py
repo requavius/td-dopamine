@@ -12,7 +12,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "results"
 LEVELS = (0.2, 0.6, 1.0, 1.5)  # the 4 x 4 grid of f and k
-WORKERS = max(1, (os.cpu_count() or 2) - 1)
+# All but one core, or TEMPORAL_WORKERS (for a machine with less memory per core).
+WORKERS = int(os.environ.get("TEMPORAL_WORKERS", 0)) or max(1, (os.cpu_count() or 2) - 1)
 
 
 def out_dir(name):

@@ -12,10 +12,20 @@ PANELS = [
 ]
 
 
+# r and RMSE of each parameter, true against recovered.
+def recovery_stats(res):
+    out = {}
+    for name, tcol, hcol, _, _ in PANELS:
+        truth, est = res[tcol].to_numpy(), res[hcol].to_numpy()
+        out[name] = {"r": float(np.corrcoef(truth, est)[0, 1]),
+                     "rmse": float(np.sqrt(np.mean((est - truth) ** 2)))}
+    return out
+
+
 def plot_recovery(res, out_path, title="Initiation DDM parameter recovery", reps=5):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    stats = {}
+    stats = recovery_stats(res)
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 5))
 
@@ -36,9 +46,7 @@ def plot_recovery(res, out_path, title="Initiation DDM parameter recovery", reps
         ax.plot(means.index, means.to_numpy(), "o-", color="black",
                 markersize=5, linewidth=1.2, alpha=0.8, label="mean per level")
 
-        r = float(np.corrcoef(truth, est)[0, 1])
-        rmse = float(np.sqrt(np.mean((est - truth) ** 2)))
-        stats[name] = {"r": r, "rmse": rmse}
+        r, rmse = stats[name]["r"], stats[name]["rmse"]
 
         ax.set_xlabel(f"true {name}")
         ax.set_ylabel(f"recovered {name}")

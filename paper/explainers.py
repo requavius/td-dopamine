@@ -83,7 +83,7 @@ def simulate(f, k, design, n, seed):
     rows = []
     for v, c in design:
         for _ in range(n):
-            go, rt = A._draw(f, k, A.snap_value(v), A.snap_cost(c), 0.0)
+            go, rt, _ = A._draw(f, k, A.snap_value(v), A.snap_cost(c), 0.0)
             rows.append((v, c, go, rt))
     return rows
 

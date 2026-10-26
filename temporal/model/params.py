@@ -64,8 +64,7 @@ class ModelState:
     skipped: list = field(default_factory=list)  # given up on; returned only if that setting is on
     skips: int = 0        # questions given up on
     corrections: int = 0  # missed or skipped questions later answered correctly
-    stay_streak: int = 0  # consecutive non-GO draws; at SESSION_EXIT_STREAK the session ends
-    attempts: int = 0     # non-GO draws since the last GO; not reset by a session ending
+    away: int = 0         # ticks spent out of the task, waiting to come back; never recorded
 
     # The records the fit reads.
     first_passage: list = field(default_factory=list)        # redo decisions
@@ -73,7 +72,7 @@ class ModelState:
     persistence: list = field(default_factory=list)          # one per question worked on
 
     episodes: int = 0   # completed sets (reward delivered)
-    stuck: int = 0      # start decisions that came back STAY or timed out
+    stuck: int = 0      # start decisions answered "stop", each the end of a session
     abandoned: int = 0  # sets walked out of
     rpe: dict = field(default_factory=dict)  # last TD error at each slot
 

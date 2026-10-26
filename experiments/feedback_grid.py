@@ -1,10 +1,10 @@
 """Does showing feedback raise engagement for everyone, and how do f and k shape it?
 
 The task of task_choice (question-type task, skips on, one setting held for each run of 300
-start decisions, review 0.25, skipped questions dropped, no controller) for the 16 people of
-the 4 x 4 grid, at all six targets, feedback shown and hidden, 16 seeds paired across
-targets and feedback. Current model: gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap,
-T_DUR 7.0 s. Engagement = P(start next set).
+ticks, review 0.25, skipped questions dropped, no controller) for the 16 people of the
+4 x 4 grid, at all six targets, feedback shown and hidden, 16 seeds paired across targets
+and feedback. Current model (V4): gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap,
+T_DUR 7.0 s. Engagement = P(start next set), over the start decisions recorded.
 
 Claims, fixed before the run (paired on seed):
   F1  "Showing feedback never lowers engagement" holds if, across the 96 person x target

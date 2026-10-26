@@ -1,8 +1,9 @@
 """Which difficulty keeps a person engaged and earns most, and what showing feedback does.
 
-Question-type task (`controller.run`), skips on, one setting held for each run of 300 start
-decisions, review rate 0.25, skipped questions dropped, no controller. Current model:
-gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
+Question-type task (`controller.run`), skips on, one setting held for each run of 300
+ticks (a tick is a start decision in a session, or a chance to come back while away),
+review rate 0.25, skipped questions dropped, no controller. Current model (V4): gamma
+0.9, ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0 s.
 
     a         five people, every target, feedback shown, 16 seeds paired across targets
     a_hidden  the same people, targets and seeds with feedback hidden
@@ -37,15 +38,19 @@ SEEDS_A = 16
 SEEDS_B = 96
 
 
-# One run of one fixed setting. Shared with feedback_grid and lockout.
+# One run of one fixed setting, N ticks long. Shared with feedback_grid and lockout.
+# P(start) is the share of recorded start decisions on which they chose to start, slow
+# choices included; `away` is the share of ticks spent out of the task.
 def one_run(task):
     part, f, k, target, feedback, seed = task
     sim = run(UserParams(f=f, k=k), env=Environment(target, REVIEW, feedback, False),
-              n_decisions=N, seed=seed)
+              n_ticks=N, seed=seed)
     st = sim.state
+    starts = st.initiation_passages
     return dict(part=part, f=f, k=k, target=target, feedback=feedback, seed=seed,
-                reward=st.total_reward, sets=st.episodes,
-                p_go=float(np.mean([p["GO"] == 1 for p in st.initiation_passages])))
+                reward=st.total_reward, sets=st.episodes, decisions=len(starts),
+                p_go=float(np.mean([p["chose"] == 1 for p in starts])) if starts else 0.0,
+                away=st.away / N)
 
 
 def tasks():
@@ -81,6 +86,12 @@ def summarize(df):
         print(f"{f:>4}, {k:<4}  " + "  ".join(f"{w[t].mean():5.2f}" for t in TARGETS)
               + "   " + ", ".join(f"{t:.0%}" for t in near))
 
+    print(f"\n== share of the {N} ticks spent away, the same runs (no claim) ==")
+    print(f"{'f, k':>10}  {heads}")
+    for f, k in PEOPLE:
+        w = a[(a.f == f) & (a.k == k)].pivot(index="seed", columns="target", values="away")[list(TARGETS)]
+        print(f"{f:>4}, {k:<4}  " + "  ".join(f"{w[t].mean():5.2f}" for t in TARGETS))
+
     print("\n== total reward, the same runs (claim A) ==")
     print(f"{'f, k':>10}  {heads}   peak")
     for f, k in PEOPLE:
@@ -95,14 +106,14 @@ def summarize(df):
     b = df[df.part == "b"]
     print(f"\n== feedback shown - hidden, f = k = 0.8, {SEEDS_B} paired seeds (claim B) ==")
     diffs = {}
-    for col, name in (("p_go", "P(start)"), ("reward", "total reward")):
+    for col, name in (("p_go", "P(start)"), ("away", "share away"), ("reward", "total reward")):
         cells = []
         for t in TARGETS:
             m, e = paired(b[b.target == t], col)
             if col == "reward":
                 diffs[t] = (m, e)
             mark = "*" if abs(m) > 2 * e else " "
-            cells.append(f"{t:.0%} {m:+.3f} ± {e:.3f}{mark}" if col == "p_go" else
+            cells.append(f"{t:.0%} {m:+.3f} ± {e:.3f}{mark}" if col != "reward" else
                          f"{t:.0%} {m:+.1f} ± {e:.1f}{mark}")
         print(f"{name:>12}: " + "  ".join(cells))
     print("(* beyond 2 SE)")

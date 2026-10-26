@@ -104,8 +104,7 @@ def fig6():
 
 # Expected precision of f and k from 300 start decisions, by the kind of decisions the
 # data holds (experiments.precision).
-DESIGNS = (("starts", "starts"), ("warm", "warm\nstarts"),
-           ("starts_redo", "starts\n+ redos"), ("warm_redo", "warm\n+ redos"))
+DESIGNS = (("starts", "starts"), ("starts_redo", "starts\n+ redos"))
 
 
 def _precision(d):
