@@ -1531,7 +1531,10 @@ probed runs).
   2% lapse mixture gives a fast decision any density, so a person whose non-decision time
   exceeds their own fastest decision cannot be fitted, and the bound has to move with the
   data. With few decisions, a fitted `T0` of 0 cannot be told apart from a small positive
-  value.
+  value: in the five-parameter recovery, 6 of the 16 people whose true `T0` was 0.06 s or
+  less were fitted at 0, and no one with a larger `T0` was. `T0`'s standard errors from the observed information run
+  slightly narrow (89.2% coverage where 95% is nominal); those from the Fisher
+  information reached 90.3% ("The bound can be fitted").
 - The deadline is set from the human decision times seen so far. Anyone slower than
   `T_DUR = 7.0` is censored again; `python -m temporal audit` flags a share past the
   deadline above 2%.
