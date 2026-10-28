@@ -191,6 +191,7 @@ class Simulation:
             # the earlier model, kept for comparison -- is divided back out of it.
             earned = (achievement if self.reward == "achievement"
                       else passed / ACHIEVEMENT_SCALE)
+            self.achievement_so_far = achievement  # for learners that assume the achievement reward
             reward, credited = slot_reward(state, earned, credited, self.feedback, s == last)
             delta = self.step_stage(s, reward=reward)
             state.slot_delta = delta
