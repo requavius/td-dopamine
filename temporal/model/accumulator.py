@@ -1,7 +1,9 @@
 """The accumulator: one drift-diffusion process behind every start and redo decision.
 
-SIGMA, BOUND and T_DUR are pinned on purpose: freed, they absorb variance that belongs
-to f and k, and identifiability goes with it.
+SIGMA is fixed because it is the unit: drift, bound and noise scaled together change
+nothing observable. BOUND is pinned at 1.5 here and can be fitted per person
+(temporal.fastlik, experiments.recovery_lhc). T_DUR is where the analysis stops reading
+a decision, not a parameter of the person.
 """
 import numpy as np
 import pyddm

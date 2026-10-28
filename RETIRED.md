@@ -23,8 +23,8 @@ that did not pan out are listed at the end, by the model they belonged to.
 
 Changes under V3 that did not change the model: the information-seeking controller and
 redo-prompt settings (2026-10-11), the package restructure (2026-10-11, regression tests
-reproduce every seeded output), and the move of the experiments and paper figures into
-the repo, with seeded recovery sweeps (2026-10-20). Only the sweeps' tables were re-run.
+reproduce every seeded output), and the move of the experiments and figures into the
+repo, with seeded recovery sweeps (2026-10-20). Only the sweeps' tables were re-run.
 
 V4 changes no equation. It changes what a simulated person does and what is recorded of
 it (see "The recording flaw in V1 to V3"), which changes every seeded output, so every
@@ -33,8 +33,18 @@ the lapse mixture is passed to pyddm explicitly at its default, simulated redo r
 log the error they were decided after (as the app's do), and `experiments/value_checks.py`
 replaces two hand measurements.
 
-`f` values are on different scales across versions: `f` is identified only up to γ,
-`ACHIEVEMENT_SCALE` and the bootstrap, all of which changed between V1 and V2.
+`f` values are on different scales across versions: with γ held fixed, `f` is identified
+only up to γ, `ACHIEVEMENT_SCALE` and the bootstrap, all of which changed between V1 and
+V2.
+
+Changes under V4 that did not change the model (2026-10-28): γ, and in one experiment
+`BOUND` and `T0` as well, can be fitted per person instead of held at 0.9 and 1.5 (README,
+"Fitting the discount factor" and "The bound can be fitted"); a closed-form likelihood
+(`temporal/fastlik.py`) that matches pyddm's; and the simulator records the achievement
+reward as it accrues, which changes no draw (the regression tests pass unchanged). No
+earlier result was re-measured: every result fitted with γ at 0.9 stands, under that
+condition. What these changes retired is listed below, under "Claims withdrawn under
+V4".
 
 ---
 
@@ -71,8 +81,8 @@ What it did to the results:
 - **The cold rows carried nearly all the cost variation at the start node.** The V3
   precision table (below) put the sd of cost at 0.154 with them and 0.012 without, and the
   expected SD of `k` from 300 start decisions at 0.140 against 0.509. Every recovery from
-  start decisions alone (the single, coupled, four-learner and `T0` sweeps, Figures 4 and
-  S2, the single-`diff` part of Figure 5) measured `k` with information a person never
+  start decisions alone (the single, coupled, four-learner and `T0` sweeps, and the
+  single-`diff` part of the misspecification sweep) measured `k` with information a person never
   gives. The coupled pipeline's design, two learners at different cold-start costs, existed
   only in those rows.
 - **Engagement and reward were counted per draw**, and a cold stop counted as a decision.
@@ -431,8 +441,7 @@ the pinned values.
 The setup is the app's: question types with Elo ratings, skips on, and `InfoController`
 steering from the default setting. Each run has 300 start decisions plus their redo
 decisions. People (f, k) = (0.8, 0.8), (1.2, 0.4) and (0.6, 1.2), 5 seeds each, with the
-same seeds at every level (2026-10-21, `python -m experiments.misspecification`; Figure 5
-plots it beside the single-`diff` version below). Bias of the analyst fit is (estimate − true) / true, mean ± SE of 15 fits:
+same seeds at every level (2026-10-21, `python -m experiments.misspecification`). Bias of the analyst fit is (estimate − true) / true, mean ± SE of 15 fits:
 
 | person | bias in f | bias in k | bias in f / k | undecided |
 |---|---|---|---|---|
@@ -883,6 +892,14 @@ value. Replaced by the drift-diffusion model in May 2026.
 
 ---
 
+## Claims withdrawn under V4 (2026-10-28)
+
+| claim | where it stood | replaced by | why |
+|---|---|---|---|
+| "`SIGMA`, `BOUND` and `T_DUR` are held fixed so they cannot absorb variance; freeing them removes the identifiability" | README, "Fixed parameters carry the identifiability"; `accumulator.py`'s docstring | README, "What can be fixed, and what fixing costs": `SIGMA` must be fixed, `BOUND` can be fitted, `T_DUR` is not a parameter | Only a common rescaling of drift, bound and noise is unobservable, so one of the three sets the unit; with the noise fixed the bound is identified, which is the standard DDM's own convention. `T_DUR` is where the analysis stops reading a decision, not something a person has. The measured test is "The bound can be fitted". |
+| "`f` is identified only up to γ", as a property of the model | README, "Reporting conventions" and the first known limitation | "up to γ unless γ is fitted" | γ can be recovered from the app's decisions (README, "Fitting the discount factor": the estimate was the true γ in 60 of 60 runs, and `f` unbiased once it was fitted) |
+| Fisher information "has not been used as a diagnostic", under deferred next steps | README, "Next steps" | `experiments/recovery_lhc.py` computes it for `f`, `k`, γ, `BOUND` and `T0` and checks its standard errors against the fits | built |
+
 ## Implementations that did not pan out
 
 | implementation | model | what replaced it | why |
@@ -897,7 +914,7 @@ value. Replaced by the drift-diffusion model in May 2026.
 | `T0` pinned at 0 for real people | V1 | fitted in [0, 0.5] s | biased `f` and `k` 8 to 15% low |
 | reaction terms `b_seen`, `b_unseen`, `b_fb` (five-parameter fit) | V1, V2 | prediction error carried in value; reward lands when shown | patched a learner that produced no mid-set error; no mechanism |
 | `f` RMSE ≈ 0.035 pass condition for one learner | V2 | `f`, `k` RMSE ≤ 0.05 | belonged to a designed, not self-generated, value range |
-| seeding learners across the learning curve to widen value | V2 | kept for the paper's design, not as a fix | did nothing detectable for `f` |
+| seeding learners across the learning curve to widen value | V2 | kept as the recovery design, not as a fix | did nothing detectable for `f` |
 | joint fit of decisions with answer and skip times | V2, V3 | decisions for `f` and `k`; times for patience only | made `f` and `k` worse in simulation (under V4 it changes neither detectably, and the choice stands) |
 | reward-planning `Controller` as the app's controller | V2, V3 | `InfoController` (2026-10-11) | left `k` poorly measured (RMSE 0.22 to 0.29) |
 | 84 settings, rollouts always scheduling review | V3 | 96 settings, rollouts follow each setting's review mode | planned a task the person never saw |

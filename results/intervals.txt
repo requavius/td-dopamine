@@ -43,4 +43,4 @@ P(start): information 0.847
   f 1.0, k 1.0: +0.0280  [+0.0087, +0.0473] over 16 seeds
   f 1.2, k 0.4: +0.0207  [+0.0054, +0.0360] over 16 seeds
 across the five people: +0.0236  [+0.0146, +0.0326] (t, 4 df), 5 of 5 above zero
-for reference, the paper's test on the 30 cells: +0.0236, t = 4.70, p = 5.9e-05 (cells of one person are not independent, so this p is too small)
+for reference, a one-sample test on the 30 cells: +0.0236, t = 4.70, p = 5.9e-05 (cells of one person are not independent, so this p is too small)

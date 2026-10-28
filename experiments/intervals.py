@@ -1,27 +1,27 @@
-"""Intervals for two results already in the paper, from their saved runs. No simulation.
+"""Intervals for two saved results, from their runs. No simulation.
 
 Both analyses were added on 2026-10-28, after the results were known. They are
 descriptive: they put an interval on an effect, and do not replace the claims each
 experiment fixed before its run (the 2·SE rules in experiments.controllers and
 experiments.task_choice).
 
-1. Controllers (Table 1, Figure 8; results/controllers/): the same 32 people and seeds
+1. Controllers (results/controllers/): the same 32 people and seeds
    under every controller. The information controller minus each other controller, for
    f RMSE and k RMSE at 100 and 300 ticks, total reward and P(start). A bootstrap
    resamples people with replacement, keeping each person's controllers together, and
    recomputes each RMSE on the resample; 10,000 resamples, 95% percentile intervals.
    γ was known and correct (0.9) for every person and every fit.
 
-2. Feedback (paper §5.3, Figure 7; results/task_choice/): five people, six targets,
+2. Feedback (results/task_choice/): five people, six targets,
    feedback shown and hidden on the same 16 seeds. Shown minus hidden in P(start):
    - per person: the mean over targets and seeds, with an interval over the 16 seeds
      (each seed averaged over the six targets first), t with 15 df;
    - across the five people: the mean of the five per-person effects, t with 4 df. Five
      values are too few for a bootstrap (126 distinct resamples);
-   - for reference, the test the paper reported: a one-sample t-test on the 30
-     person × target means, which treats cells of one person as independent.
+   - for reference, a one-sample t-test on the 30 person × target means, which treats
+     cells of one person as independent.
 
-    python -m experiments.paper_stats
+    python -m experiments.intervals
 """
 import numpy as np
 import pandas as pd
@@ -90,7 +90,7 @@ def feedback():
           f"{(people > 0).sum()} of 5 above zero")
     cells = diff.groupby(["f", "k", "target"]).d.mean()
     res = stats.ttest_1samp(cells, 0.0)
-    print(f"for reference, the paper's test on the 30 cells: {cells.mean():+.4f}, "
+    print(f"for reference, a one-sample test on the 30 cells: {cells.mean():+.4f}, "
           f"t = {res.statistic:.2f}, p = {res.pvalue:.1e} (cells of one person are not "
           f"independent, so this p is too small)")
 

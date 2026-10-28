@@ -346,9 +346,14 @@ They are two observations of the same person, and their draws stack into one fit
   profile: `low` 0.3, `mid` 0.6, `high` 1.0) after leaving, plus `EFFORT_WEIGHT` (0.1)
   times `1 + review load` of the last set. Every recorded start decision is in a session,
   so the cold-start cost only sets how long a person stays away (below).
-- Noise, boundary and deadline are pinned at `SIGMA = 0.7`, `BOUND = 1.5`, `T_DUR = 7.0`
-  so they cannot absorb variance that belongs to the parameters. The deadline was 3.0 s
-  until 2026-09-13; see "The deadline must sit past human decision times".
+- The noise is fixed at `SIGMA = 0.7`. It sets the unit everything else is measured in,
+  as in the standard DDM, and it cannot be fitted together with the bound: scaling drift,
+  bound and noise by one factor changes nothing observable. The bound is `BOUND = 1.5`
+  in every fit except where it is fitted per person ("Fitting the discount factor" and
+  "The bound can be fitted"). The deadline `T_DUR = 7.0` is a cutoff of the analysis, not
+  a property of the person, so it is never fitted: a person who decides slowly is
+  described by their bound and non-decision time. It was 3.0 s until 2026-09-13; see
+  "The deadline must sit past human decision times".
 
 **The repeat-or-continue node** fires after a missed new question, when the learner
 decides redos and feedback is shown. It fires *after* the miss has landed as reward,
@@ -410,6 +415,30 @@ a *person* who took longer than 7 s to click, since pyddm refuses outright to fi
 RT past the model's deadline. Undecided trials are fed back in as counts, not
 discarded; see "Censored trials are data". How well the fit recovers `f` and `k` is
 under "Current results".
+
+**Fitting γ (since 2026-10-28).** γ is not in the drift; it shapes `value` through
+learning. To fit it, the person's reward history is replayed through TD learners at
+candidate values of γ (at the fit's α, 0.05), which gives the value every recorded
+decision would have had under each. The γ whose values best explain the decisions is the
+estimate: a profile likelihood, `(f, k)` fitted at each candidate. The app records
+everything the replay needs. In simulation the replay runs alongside the person, as
+shadow learners (`experiments/gamma_profile.py`, `GridShadow`).
+
+**A closed-form likelihood (since 2026-10-28, `temporal/fastlik.py`).** With a constant
+drift the accumulator's first-passage density has a standard series (Navarro & Fuss,
+2009), and the chance of reaching neither bound by `T_DUR` has one too. `fastlik` adds
+pyddm's `T0` shift and its uniform lapse mixture the same way pyddm does, and
+`tests/test_fastlik.py` checks it against pyddm's Fokker-Planck solution: densities agree
+within 0.2% of their peak and undecided probabilities within 0.001, at bounds 1.0 to 2.4,
+`T0` 0 to 0.23 s and drifts −2.5 to 3. One evaluation takes about 0.2 ms at 700 decisions,
+against seconds for a pyddm fit, and value needs no rounding to 0.05, so the likelihood
+is smooth in γ. `experiments/recovery_lhc.py` uses it to fit `f`, `k`, γ, `BOUND` and `T0`
+together, with standard errors from the observed and the Fisher information.
+
+**What the app fits today.** The controller's estimate and the interface's "fit my
+parameters" still fit `(f, k, T0)` with pyddm, γ held at 0.9 and `BOUND` at 1.5, and
+`InfoController` plans with those values. Fitting γ and the bound there is not built
+(see "Next steps").
 
 ---
 
@@ -811,7 +840,7 @@ measurement in `RETIRED.md`).
 ### Fitting the discount factor (2026-10-28)
 
 Every other result in this section holds γ at 0.9. A person whose γ differs gets `f`
-biased by −62% (γ 0.7) to +57% (γ 0.95) on the app's task (Figure 5a), because a wrong γ
+biased by −62% (γ 0.7) to +57% (γ 0.95) on the app's task (below), because a wrong γ
 mostly rescales value and `f` absorbs the rescaling. Fitting γ removes that bias.
 
 **Design** (`python -m experiments.gamma_profile`). The app's task: question types with
@@ -852,6 +881,25 @@ likelihood-ratio interval inside ±0.1) in at least 80% of runs.
   `1 − p`, the estimate was the true γ in 17 of 18 runs and its neighbour in one: R1 holds
   so far. `f` is not protected: a wrong bound scales `f` and `k` (+54 to +60% at 1.0, −27%
   at 2.0), and the fraction-right person gets `f` 46 to 54% too low even with γ fitted.
+
+### The bound can be fitted: f, k, γ, BOUND and T0 together
+
+**Design** (`python -m experiments.recovery_lhc`). 100 simulated people from a seeded
+Latin hypercube over `f` and `k` in 0.2 to 1.5, γ in 0.6 to 0.97, `BOUND` in 1.0 to 2.0 and
+`T0` in 0 to 0.4 s. Each plays the app's task under `InfoController` (which plans with γ
+0.9 and `BOUND` 1.5, as the app does) for 300 start decisions plus their redo decisions;
+α is 0.05 for person and fit. Each history is saved once, with value under every γ from
+0.50 to 0.99 in steps of 0.01, and all five parameters are fitted by maximum likelihood
+with the closed-form likelihood, γ continuous (value interpolated between the steps by a
+cubic spline). The same data are also fitted the current way (γ 0.9 and `BOUND` 1.5
+pinned; `f`, `k`, `T0` fitted). Claims fixed before any fit: **L1**, RMSE, bias and r for
+each parameter (no threshold; the numbers are the result); **L2**, over fits away from a
+parameter bound, the standardized errors `(recovered − true) / SE`, SE from the observed
+information, have SD within 0.8 to 1.25 for every parameter and cover the truth within
+±1.96 SE in 90 to 98% of fits; **L3**, the same with SE from the Fisher information at the
+truth; **L4**, report the correlation of γ with `f` from the inverse Fisher information.
+
+**Results:** the simulations are running.
 
 ### Which difficulty and whether to show feedback
 
@@ -932,7 +980,7 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
   behind. At hard targets a run's total depends heavily on runs of luck, so the paired
   difference varies several times more than at 90%.
 - **The five people of the first table, per person (added 2026-10-28, after the results
-  were known; `python -m experiments.paper_stats`).** Shown − hidden in P(start), each
+  were known; `python -m experiments.intervals`).** Shown − hidden in P(start), each
   person's mean over six targets and 16 paired seeds, with a t interval over the seeds:
   +0.034 [+0.025, +0.042] (f 0.4, k 0.4), +0.020 [−0.015, +0.054] (0.6, 1.2), +0.016
   [+0.002, +0.030] (0.8, 0.8), +0.028 [+0.009, +0.047] (1.0, 1.0), +0.021 [+0.005,
@@ -1035,7 +1083,7 @@ fewest decisions (143 in 300 ticks): people under them were away 52% of the time
 
 **Intervals (added 2026-10-28, after the results were known; descriptive, beside the
 2·SE rule).** A bootstrap over the 32 people, each person's arms kept together, 10,000
-resamples (`python -m experiments.paper_stats`). Information minus each other way, 95%
+resamples (`python -m experiments.intervals`). Information minus each other way, 95%
 intervals:
 
 | | default | random | reward, 84 | reward, 96 |
@@ -1206,8 +1254,7 @@ the pinned values.
 The setup is the app's: question types with Elo ratings, skips on, and `InfoController`
 steering from the default setting. Each run has 300 start decisions plus their redo
 decisions. People (f, k) = (0.8, 0.8), (1.2, 0.4) and (0.6, 1.2), 5 seeds each, with the
-same seeds at every level (2026-10-25, `python -m experiments.misspecification`; Figure 5
-plots it beside the single-`diff` version below). Bias of the analyst fit is (estimate −
+same seeds at every level (2026-10-25, `python -m experiments.misspecification`). Bias of the analyst fit is (estimate −
 true) / true, mean ± SE of 15 fits:
 
 | person | bias in f | bias in k | bias in f / k | undecided |
@@ -1266,13 +1313,20 @@ by 9 to 35% wherever `k` stays above 0. The likely reason `k` holds up on the ap
 is the redo decisions, whose cost varies more than at any other decision. All of these
 fits used γ = 0.9, `ACHIEVEMENT_SCALE = 4`, the continuing bootstrap and `T_DUR = 7.0`.
 
-### Fixed parameters carry the identifiability
+### What can be fixed, and what fixing costs
 
-`SIGMA`, `BOUND` and `T_DUR` are held fixed precisely so they cannot absorb variance
-belonging to the parameters. Freeing them removes the identifiability. Pinning them at the
-wrong value also has a cost: a person whose bound is 1.0 rather than 1.5 gets `f` 57% and
-`k` 71% too high, though their ratio stays within 8% (see "The person may not
-share the model's constants" above).
+- **`SIGMA` has to be fixed.** Drift, bound and noise scaled by one factor give the same
+  choices and RTs, so one of them sets the unit. As in the standard DDM, it is the noise.
+- **`BOUND` does not have to be.** With the noise as the unit, the bound has its own
+  signature: it widens the RT distributions and makes choices more consistent without
+  changing which way they lean. It is pinned at 1.5 in every fit except where it is
+  fitted per person ("The bound can be fitted"). Pinning it at the wrong value costs
+  `f` and `k` together: a person whose bound is 1.0 gets `f` 57% and `k` 71% too high,
+  though their ratio stays within 8% (see "The person may not share the model's
+  constants").
+- **`T_DUR` is not a parameter.** It is where the analysis stops reading a decision;
+  slow deciders are described by the bound and `T0`.
+- **γ can be fitted** ("Fitting the discount factor"); α is still assumed.
 
 ### How value and cost together decide what can be measured
 
@@ -1326,13 +1380,22 @@ probed runs).
 
 ## Known limitations
 
-- `f` is confounded with the discount factor. Under the continuing bootstrap
-  `V(0) ≈ γ^(n−1)·E[r] / (1 − γ^n)`, so `f` is only identified up to that factor, and,
-  since `ACHIEVEMENT_SCALE` multiplies value, up to that scale too. State `γ`, the scale
-  and the bootstrap whenever an `f` value is reported; an `f` fitted under the terminal
-  bootstrap is not on the same scale. In simulation, a person whose γ is 0.8 gets `f`
-  47% too low and `k` 3% too high (see "The person may not share the
-  model's constants").
+- With γ held fixed, `f` is confounded with the discount factor. Under the continuing
+  bootstrap `V(0) ≈ γ^(n−1)·E[r] / (1 − γ^n)`, so a wrong γ mostly rescales value and `f`
+  absorbs it: a person whose γ is 0.8 gets `f` 47% too low and `k` 3% too high. Fitting γ
+  removes this in simulation ("Fitting the discount factor"), but every result here
+  except that one, the controller comparison included, held γ at 0.9. `f` is also
+  identified only up to `ACHIEVEMENT_SCALE`, which multiplies value; state γ (or that it
+  was fitted), the scale and the bootstrap whenever an `f` value is reported.
+- The reward is assumed. Right answers are worth `1 − p`; a person who values the
+  fraction right instead gets `f` 46 to 54% too low even with γ fitted ("Fitting the
+  discount factor", robustness). No fitted parameter absorbs this.
+- The learning rate α is assumed (0.05) in every fit. On the app's task a wrong α moved
+  `f / k` by at most 5% with γ held at 0.9; with γ fitted it is being measured.
+- With feedback hidden, the model pays the set's reward at an end-of-set score, but the
+  app shows no end-of-set score: a hidden set never tells the person how they did. Every
+  simulated result assumes the score is seen. The app needs the screen before human data
+  are collected, or the model's account of hidden feedback does not describe them.
 - The non-decision time is bounded to [0, 0.5] s when fitted. Below that bound only the
   2% lapse mixture gives a fast decision any density, so a person whose non-decision time
   exceeds their own fastest decision cannot be fitted, and the bound has to move with the
@@ -1368,7 +1431,8 @@ probed runs).
 - Learning still saturates at a fixed difficulty, and under `choice` and `quiet` the
   missed list grows without bound; nothing forgets.
 - Value and cost are discretized (`VALUE_STEP`, `COST_STEP`) to keep the number of
-  Fokker-Planck solves bounded.
+  Fokker-Planck solves bounded. The closed-form likelihood does not need it; the
+  simulator and the app's pyddm fit still round.
 - Both decision nodes share one accumulator and one set of parameters. That is an
   assumption: a real task might give the redo choice a different deadline.
 - Patience is estimated with `f` and `k` held at the decisions' estimate, so their
@@ -1442,16 +1506,21 @@ probed runs).
      skipped questions helps. A person whose ability grows from corrections would be the
      test.
    - `stage_amt` is not a lever yet, and show count / show score have no model channel.
+   - **Plan with fitted γ and bound.** Estimate `(f, k, γ, BOUND, T0)` with the closed-form
+     likelihood, replay value at candidate γ, draw γ and the bound in the rollouts, and
+     include them in the information score. In the model, hidden feedback delays reward,
+     so it should cost a steep discounter more than a patient person: γ would give the
+     controller a reason to choose feedback per person. Then compare it with the current
+     controller on people whose γ and bound vary, claims fixed before the run.
 
 9. Online re-estimation. Parameters drift within a session with fatigue, mood and
    boredom, so the controller must track them rather than fit once.
 
 ### Deferred, but kept in view
 
-- Fisher information analysis, to diagnose unidentifiable parameter combinations
-  directly rather than inferring them from wide scatter. `InfoController` already
-  computes the `(f, k)` information of a set of decisions (`controller.fisher`), but only
-  to plan; it has not been used as a diagnostic.
+- Which reward a person values could be measured rather than assumed: fit each person
+  under `1 − p` and under the fraction right and compare likelihoods, after a recovery
+  test shows the comparison picks the right one.
 - Two-state fast/slow ability (Smith, Ghazizadeh & Shadmehr 2006), if the protocol ever
   gains washout and re-exposure blocks.
 - Model a process that degrades: fatigue, forgetting, or the rising cost of continued
@@ -1461,10 +1530,9 @@ probed runs).
 
 ## Reproducing every result
 
-Every number in this README and every figure in the paper comes from code in this repo.
-Simulations save their results to `results/`, which is committed, and the figures are
-drawn from those files. Redrawing every figure takes a few minutes, and re-printing a
-table from the saved results (`--replot`) takes seconds. Re-running a simulation from
+Every number in this README comes from code in this repo. Simulations save their results
+to `results/`, which is committed, and re-printing a table from the saved results
+(`--replot`) takes seconds. Re-running a simulation from
 scratch takes minutes to hours and gives the same results, because every run is seeded.
 Fits may differ slightly because of how pyddm's optimizer works.
 
@@ -1475,30 +1543,6 @@ Install as in "Running the app", then check the install:
 ```bash
 uv run pytest
 ```
-
-### Redraw the paper's figures
-
-```bash
-uv run python -m paper              # every figure, into paper/figures/ (PNG, and PDF for most)
-uv run python -m paper fig7 fig8    # only some
-uv run python -m paper explainers   # the explanatory figures, into paper/figures/explainers/
-```
-
-| figure | shows | drawn from | code |
-|---|---|---|---|
-| 1 | the model: the loop, the decision, what makes a task worth starting | nothing (schematic + simulated paths) | `paper/model.py` |
-| 2 | drift planes: why two decisions with different value/cost mixes pin down `f` and `k` | nothing (exact drifts) | `paper/explainers.py` |
-| 3 | patience on a recorded session | a `decisions.jsonl` (see below) | `paper/explainers.py` |
-| 4 | recovery from one person | `results/recovery_sweep/` | `paper/model.py` |
-| 5 | bias in `f`, `k` and `f / k` when the person's γ, learning rate, noise or bound differ from the fit's, from start decisions only and with redo prompts | `results/misspecification/` | `paper/misspecification.py` |
-| 6 | shortcuts in the fit, one at a time | `results/recovery_sweep/`, `results/pipelines/`, `results/precision/` | `paper/shortcuts.py` |
-| 7 | which difficulty keeps people engaged, and what feedback does | `results/task_choice/` | `paper/task.py` |
-| 8 | the controllers over time: `k` error and the spread of cost each collects | `results/controllers/` | `paper/controllers.py` |
-| S2 | timed-out trials kept vs dropped | `results/recovery_sweep/` | `paper/model.py` |
-| S3 | every combination of three fit choices | `results/fit_factorial/` | `paper/shortcuts.py` |
-| S4 | reward by difficulty, and the one-person feedback test | `results/task_choice/` | `paper/task.py` |
-| S5 | the controllers over time, adding `f` error and engagement | `results/controllers/` | `paper/controllers.py` |
-| identifiability | why one decision cannot separate `f` and `k`, in 2D; the 3D version is Figure 2 | nothing (exact drifts) | `paper/identifiability.py` |
 
 ### Re-print or re-run each result
 
@@ -1526,22 +1570,17 @@ several.
 | The person may not share the model's constants | `python -m experiments.misspecification` | `results/misspecification/` |
 | How often the error hits `DELTA_CLIP`, the start node's effort cost, and what the continuing bootstrap does to value | `python -m experiments.value_checks` | `results/value_checks/` |
 | The coupled recovery plot | `python -m temporal recovery --mode coupled --reps 3` | `assets/initiation_recovery_coupled.png` |
-| Fitting the discount factor; Figure 5(a)'s γ-fitted line | `python -m experiments.gamma_profile` (split by `--gammas`, `--reps`, `--tag`) | `results/gamma_profile/runs_*.csv` |
+| Fitting the discount factor | `python -m experiments.gamma_profile` (split by `--gammas`, `--reps`, `--tag`) | `results/gamma_profile/runs_*.csv` |
 | γ when α, `BOUND` or the reward differ from the fit's | `python -m experiments.gamma_robustness` | `results/gamma_robustness/runs_*.csv` |
-| Intervals for Table 1 and the feedback effect (no simulation) | `python -m experiments.paper_stats` | `results/paper_stats.txt` |
+| Intervals beside the controller comparison and the five-person feedback result (no simulation) | `python -m experiments.intervals` | `results/intervals.txt` |
 
 The `temporal recovery` sweeps print their tables as they finish; they have no `--replot`,
-but their saved CSVs are what Figure 6 reads. To re-run everything, run every command in
-the table.
+but their CSVs are saved. To re-run everything, run every command in the table.
 
-### Figures and checks that read a recorded session
+### Checks that read a recorded session
 
-Figure 3 and the "joint fit pull" explainer are drawn from a session record, the
-`decisions.jsonl` the app writes. No record is in the repo (`data/` is gitignored), so
-without one `python -m paper` skips them. Point it at a record with
-`TEMPORAL_RECORD=path/to/decisions.jsonl python -m paper fig3 explainers`, and check a
-record's decision times against the deadline with
-`python -m temporal audit --path path/to/decisions.jsonl`.
+No session record is in the repo (`data/` is gitignored). Check a record's decision
+times against the deadline with `python -m temporal audit --path path/to/decisions.jsonl`.
 
 ### Other commands
 
@@ -1576,6 +1615,7 @@ temporal/
     questions.py      question types, their priors, and per-person Elo ratings
     simulation.py     the simulated learner: sets, review, redo prompts, start decisions
   inference.py      sample construction, censoring, the two-parameter fit, sanity checks
+  fastlik.py        the accumulator's likelihood in closed form, checked against pyddm
   recovery.py       data generation and recovery pipelines, including persistence and patience
   controller.py     Controller (plans for reward) and InfoController (plans to measure f and k)
   plots.py          recovery figures
@@ -1586,9 +1626,7 @@ temporal/
     web.py            the same session served to a browser; static/index.html draws it
     live.py           the live view of the accumulator for the decision on screen
 experiments/        the runs behind the README's results; each saves results/<name>/
-results/            their saved results (CSV), committed so tables and figures can be checked
-paper/              the paper's figures, drawn from results/ (python -m paper)
-  figures/            where they are written (gitignored)
+results/            their saved results (CSV), committed so every table can be checked
 tests/              seeded regression tests (golden.json), and the session rule (test_sessions.py)
 RETIRED.md          results from earlier model versions, and ones later measurements replaced
 Dockerfile, fly.toml   hosting the web app; data in a volume at /data
