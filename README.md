@@ -1486,6 +1486,55 @@ each sweep's results. For `audit`: `--path` points at a `decisions.jsonl` (defau
 `data/decisions.jsonl`). For `temporal.controller`: `--values`, `--decisions` (default
 300), `--seed`. Bare `python -m temporal` is shorthand for `python -m temporal run`.
 
+### From a browser instead (optional)
+
+Everything above runs from a terminal, and that stays the way to reproduce a result.
+`taskboard/` is an optional dashboard over the same commands, for anyone who would rather
+not type them or who wants to see how far a long run has got. A run started from it is the
+same `python -m` command, run from the repo root, and it saves `results/<name>/` as before.
+
+```bash
+uv run python -m taskboard        # then open http://127.0.0.1:8765
+```
+
+It uses only the standard library. Nothing in it lists the runs by hand: it reads every
+module with a `__main__` block in `experiments/`, `temporal/` and `paper/`, along with the
+usage lines in its docstring and its argparse options, from the source and without
+importing it. A new experiment shows up without being registered anywhere. A menu picks the
+checkout to run from, the main repo or any git worktree.
+
+Each run gets a card with a progress bar, the time elapsed and an estimate of the time
+left, read from the `[i/N]` lines that `run_pool` and the recovery sweeps print (pytest's
+percentage and tqdm bars also work). The full log is one click away. The card and the log
+also give the commit the run started from, and the card warns when the checkout had
+uncommitted code changes; changes under `results/` and `logs/` don't count. A run like that
+can't back a README number until its code is committed, by the rule at the top of this
+section.
+
+Any list option, such as `--people 0-99` or `--reps 0,1`, can be split into one piece per
+computer, sized by its cores, or into N pieces that whichever computer is free takes next.
+`--tag {host}` becomes each computer's tag, so every piece writes its own
+`runs_<tag>.csv`, and a follow-up such as `--replot` can run once all the pieces are done.
+A queued run can be moved to another computer; a running one is stopped and starts again
+there from the beginning. Runs started by hand in a checkout appear as well, with their
+progress when their output goes to a file.
+
+The board asks before adding a run that is already queued or running, and holds a run
+until its computer has the cores it asked for (the workers box sets `TEMPORAL_WORKERS`).
+Runs are detached, so closing the board doesn't stop them, and reopening it picks them up
+again.
+
+With no configuration it uses only the computer it runs on, tagged `local`, the
+experiments' own `--tag` default. To add computers reached over `ssh`, copy
+`taskboard/hosts.example.json` to `taskboard/hosts.json` (gitignored) and edit it; each
+entry gives the ssh host, the folder that holds a copy of this repo, how many cores to use
+and the tag. Before a remote run the board copies the checkout's code to that folder with
+rsync, only when the code differs and never while something else is running there. It
+doesn't copy `results/`, `data/` or `logs/`. When the run finishes, the board copies the
+result files it wrote back into the checkout. Logs and process ids are kept in
+`~/.taskboard/runs/` on each computer, and the board's own state in `taskboard/state.json`
+(gitignored).
+
 ---
 
 ## Files
@@ -1516,7 +1565,10 @@ experiments/        the runs behind the README's results; each saves results/<na
 results/            their saved results (CSV), committed so tables and figures can be checked
 paper/              the paper's figures, drawn from results/ (python -m paper)
   figures/            where they are written (gitignored)
-tests/              seeded regression tests (golden.json), and the session rule (test_sessions.py)
+taskboard/          optional browser dashboard for starting, watching and splitting runs (python -m taskboard)
+  hosts.example.json  the computers it can use; copy to hosts.json (gitignored) to add more
+tests/              seeded regression tests (golden.json), the session rule (test_sessions.py),
+                    and the taskboard's log and catalog reading (test_taskboard.py)
 RETIRED.md          results from earlier model versions, and ones later measurements replaced
 Dockerfile, fly.toml   hosting the web app; data in a volume at /data
 data/               human session records (gitignored)
