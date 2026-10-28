@@ -854,7 +854,15 @@ the γ with the lowest −log L is the estimate. α 0.05, `BOUND` 1.5, `SIGMA` 0
 for person and fit alike, so γ is the only constant that differs. Claims fixed before
 the run: **P1**, the estimate is the true γ or its grid neighbour in at least 80% of runs;
 **P2**, every grid γ more than 0.1 from the estimate costs at least 1.92 in −log L (a 95%
-likelihood-ratio interval inside ±0.1) in at least 80% of runs.
+likelihood-ratio interval inside ±0.1) in at least 80% of runs. As first written P2 had no
+run-level threshold; the 80% was added on 2026-10-28 after the run had started and before
+any result was read.
+
+*Statistics.* The grid γ values within 1.92 of the lowest −log L form a 95%
+likelihood-ratio interval (Wilks: twice the drop in log-likelihood is χ² with 1 df, whose
+95% point is 3.84). Each grid point's `(f, k)` is a pyddm fit, so value is rounded to 0.05
+at every candidate γ, as in every other pyddm fit here. Bias is (estimate − true) / true,
+mean ± SE over the 15 runs of a cell, or the 60 runs pooled.
 
 | true γ | estimate = truth | `f` bias, γ fitted | `k` bias, γ fitted | `f` bias, γ held at 0.9 | `k` bias, γ held at 0.9 |
 |---|---|---|---|---|---|
@@ -877,7 +885,12 @@ likelihood-ratio interval inside ±0.1) in at least 80% of runs.
 - **When other constants are wrong (`python -m experiments.gamma_robustness`).** The same
   task, people and grid; each person differs from the fit in one more constant, and the
   fit is not told. True γ 0.8 and 0.95, 2 seeds per person (6 runs per cell), seeds
-  distinct from the profile runs. Claim fixed before the run, **R1**: the estimate is
+  distinct from the profile runs (the profile's seed plus 1000 · (1 + level index + 10 ·
+  factor index)). What the fit is not told: a person's own `BOUND` applies to their start,
+  redo and give-up draws only, while the controller's rollouts and every fit keep 1.5; a
+  person who values the fraction right learns from that reward, while the shadow learners
+  that give the fit its values are paid `1 − p`, which is what the app would compute; a
+  person's own α drives their learning, while the shadow learners keep 0.05. Claim fixed before the run, **R1**: the estimate is
   within one grid step of the truth in at least 80% of runs at every level.
 
   | person differs in | true γ | estimate | `f` bias at the estimate | `k` bias at the estimate | `f` bias, γ held at 0.9 |
@@ -911,6 +924,34 @@ parameter bound, the standardized errors `(recovered − true) / SE`, SE from th
 information, have SD within 0.8 to 1.25 for every parameter and cover the truth within
 ±1.96 SE in 90 to 98% of fits; **L3**, the same with SE from the Fisher information at the
 truth; **L4**, report the correlation of γ with `f` from the inverse Fisher information.
+
+*Estimation and uncertainty.*
+- **The people.** `scipy.stats.qmc.LatinHypercube(d=5, seed=20261028)`, scaled to the
+  ranges above; person `i` is simulated with seed `20261028 + i`, so every machine draws
+  the same people and `--people` only says which to run.
+- **Value at any γ.** Each decision's value at the 50 shadow γ values is joined by a cubic
+  spline, so the likelihood is smooth in γ. The fit uses value before rounding; the
+  person's own draws used value rounded to 0.05, a small misspecification the fit
+  carries.
+- **The fit.** Maximum likelihood with `fastlik` over `f`, `k` in [0, 3], γ in [0.5, 0.99],
+  `BOUND` in [0.5, 3] and `T0` in [0, 0.5] s: differential evolution (seeded by the
+  person's index), then L-BFGS-B from its best point. The pinned fit runs the same search
+  over `f`, `k` and `T0`.
+- **Observed information.** The Hessian of −log L at the estimate by central
+  differences, steps 0.01 for `f`, `k` and `BOUND` and 0.005 for γ and `T0`; standard
+  errors are the square roots of the diagonal of its inverse. It is computed again with
+  half the steps, and the ratio of the two SEs of γ is reported as a check that the step
+  does not matter. A fit within two steps of a parameter bound has no valid Hessian there;
+  it is counted and left out of L2 and L3.
+- **Fisher information at the truth.**
+  `I = Σ_decisions Σ_outcomes (∂p/∂θ)(∂p/∂θ)ᵀ / p`, the outcomes being each choice in
+  0.01 s bins up to `T_DUR` plus undecided, with `p` from `fastlik` (lapses and `T0`
+  included) and derivatives by central differences with the same steps. It is
+  conditional on the values and costs the person's decisions actually had. Standard
+  errors are the square roots of the diagonal of `I⁻¹`; the correlation of γ with `f` is
+  `(I⁻¹)_fγ / √((I⁻¹)_ff (I⁻¹)_γγ)`.
+- **Calibration.** For each parameter, `z = (estimate − true) / SE`. If the SEs are
+  honest, `z` is close to standard normal: SD near 1 and about 95% of `|z|` under 1.96.
 
 **Results:** the simulations are running.
 
@@ -994,7 +1035,8 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
   difference varies several times more than at 90%.
 - **The five people of the first table, per person (added 2026-10-28, after the results
   were known; `python -m experiments.intervals`).** Shown − hidden in P(start), each
-  person's mean over six targets and 16 paired seeds, with a t interval over the seeds:
+  person's mean over six targets and 16 paired seeds; each seed is first averaged over
+  the six targets, so a person's interval is a t interval over 16 values (15 df):
   +0.034 [+0.025, +0.042] (f 0.4, k 0.4), +0.020 [−0.015, +0.054] (0.6, 1.2), +0.016
   [+0.002, +0.030] (0.8, 0.8), +0.028 [+0.009, +0.047] (1.0, 1.0), +0.021 [+0.005,
   +0.036] (1.2, 0.4). Across the five: **+0.024 [+0.015, +0.033]**, t with 4 df, all five
@@ -1095,8 +1137,10 @@ fewest decisions (143 in 300 ticks): people under them were away 52% of the time
 28 to 39% under the other ways.
 
 **Intervals (added 2026-10-28, after the results were known; descriptive, beside the
-2·SE rule).** A bootstrap over the 32 people, each person's arms kept together, 10,000
-resamples (`python -m experiments.intervals`). Information minus each other way, 95%
+2·SE rule).** A bootstrap over the 32 people (`python -m experiments.intervals`): people
+drawn with replacement, each person's arms kept together so the pairing holds, each arm's
+RMSE, mean reward and mean P(start) recomputed on the resample, 10,000 resamples from a
+generator seeded at 0, 95% percentile intervals of the difference. Information minus each other way, 95%
 intervals:
 
 | | default | random | reward, 84 | reward, 96 |
@@ -1217,6 +1261,31 @@ refusals. This matches the avoidance-maintained deficit cycle that behavioral ac
 therapy targets in depression. Review mode decides what an escape is worth: under `quiet`
 an escapee learns nothing, under `choice` a high-`k` escapee declines the redos and learns
 little, under `scheduled` escapes compound.
+
+### The closed-form likelihood (`temporal/fastlik.py`)
+
+The accumulator starts midway between bounds at ±`BOUND`, drifts at a constant `μ` with
+noise `SIGMA`, and stops at `T_DUR`. Dividing by the noise gives unit noise, drift
+`v = μ / SIGMA`, bound separation `a = 2 · BOUND / SIGMA` and relative start `w = 1/2`.
+
+- **Density at the lower bound at time `t`** (Navarro & Fuss, 2009, small-time series),
+  with `u = t / a²`:
+  `p_lower(t) = (1/a²) · exp(−v·a·w − v²·t/2) · (2π·u³)^(−1/2) · Σ_{k=−7..7} (w + 2k) · exp(−(w + 2k)² / (2u))`.
+  At the upper bound (GO), the same with `−v`, since the start is midway. Over the
+  deadline `u` stays under about 1, where 15 terms are far more than enough.
+- **No bound reached by time `T`.** From the eigenfunction expansion of the diffusion
+  absorbed at both bounds, with the start midway:
+  `S(T) = (2/a) · 2·cosh(v·a/2) · exp(−v²·T/2) · Σ_{k=1,3,5..39} sin(kπ/2) · exp(−k²π²·T/(2a²)) · (kπ/a) / (v² + (kπ/a)²)`,
+  computed in logs so a large drift cannot overflow.
+- **What pyddm adds, added the same way.** `T0` shifts every passage; a decided trial at
+  `t` has density `(1 − m) · p(t − T0) + (m/2) / T_DUR` for its choice, with the lapse
+  share `m = LAPSE_MIX = 0.02` split evenly between the choices, and an undecided trial
+  has probability `(1 − m) · S(T_DUR − T0)`. pyddm shifts by whole time steps; `fastlik`
+  shifts exactly. Its densities are per second, pyddm's per time bin, which changes
+  −log L by a constant and no estimate.
+- **The check** (`tests/test_fastlik.py`): against pyddm's Fokker-Planck solution at
+  bounds 1.0, 1.5 and 2.4 with `T0` 0, 0.23 and 0.1 s, at five drifts each, densities
+  agree within 0.2% of their peak and undecided probabilities within 0.001.
 
 ### Recovery demonstrates identifiability, not accuracy
 
@@ -1448,6 +1517,12 @@ probed runs).
   simulator and the app's pyddm fit still round.
 - Both decision nodes share one accumulator and one set of parameters. That is an
   assumption: a real task might give the redo choice a different deadline.
+- Give-up times cannot measure the bound. In seconds, a give-up time is inverse
+  Gaussian with mean `patience · BOUND / μ` and shape `patience · BOUND² / SIGMA²`, and
+  scaling `BOUND` by λ, patience by 1/λ² and the drift by 1/λ leaves both unchanged. So
+  where the bound is fitted, it has to come from the decisions, as `f` and `k` do, and
+  patience then fitted with it held. `persistence.py` still uses the pinned `BOUND`, and the
+  five-parameter recovery does not fit patience.
 - Patience is estimated with `f` and `k` held at the decisions' estimate, so their
   errors pass into it, and it absorbs anything about giving up that the drift does not
   describe. A skip at a glance and giving up after a long try are one process on a
@@ -1528,6 +1603,28 @@ probed runs).
 
 9. Online re-estimation. Parameters drift within a session with fatigue, mood and
    boredom, so the controller must track them rather than fit once.
+
+### Written, not yet run
+
+- **Where the information about γ comes from** (`experiments/gamma_sources.py`). Profiles
+  from start decisions alone and from redo decisions alone, and the information about γ
+  left once `f` and `k` are profiled out. A decision's drift is `f·v − k·c`, so a fit can
+  absorb any change in value along `v` or `c`. What identifies γ is the rest of `∂v/∂γ`:
+  its residual `r` after a projection onto `(v, c)` weighted by `I_μ`, the information of
+  one decision about its drift (`controller.i_mu_table`). The profiled information is
+  `J = f² · Σ I_μ · r²`, computed for `∂v/∂γ` and for each part of value alone (`V(0)`,
+  the carried error, a redo's slot share), and `½·J·h²` predicts the rise in −log L a grid
+  step `h` from the truth, which checks the approximation against the profile itself.
+  Claim fixed before any run, **S1**: the carried error alone carries more of `J` than
+  `V(0)` alone in at least 80% of runs.
+- **Feedback switched in blocks** (`experiments/gamma_blocks.py`). Hiding feedback moves a
+  set's reward to its end without changing the total, so the drop in starting after hidden
+  sets depends on γ and not on `f`. Two arms paired on person and seed, no controller,
+  one fixed setting (aim 60% right, no scheduled review, redo prompts): feedback on and
+  off in blocks of 25 start decisions, against on throughout. Sharpness is the rise in
+  −log L from the true γ to the best grid γ more than 0.1 away. Claims fixed before any
+  run: **B1**, P1 and P2 in at least 80% of the blocks arm's runs; **B2**, sharpness higher
+  with blocks than without, paired, beyond 2 SE.
 
 ### Deferred, but kept in view
 
