@@ -11,8 +11,16 @@ fits the person's own value, and is drawn for gamma and alpha, the only constant
                  their redo decisions. Its oracle is left out: f and k stay within 5% of
                  the truth at every gamma and alpha (f/k within 10%).
 
+A fourth line in column (a), "γ fitted, with redo", is experiments.gamma_profile: the
+same task as "with redo", γ fitted (profile likelihood over the grid 0.5 to 0.99) instead
+of held at 0.9; 3 people × 5 seeds per true γ (0.7, 0.8, 0.9, 0.95). The other lines in
+column (a) show γ held at 0.9 when the person's differs, which is how every other result
+in the paper was fitted.
+
     python -m paper fig5
 """
+import glob
+
 import pandas as pd
 
 from . import style as fs
@@ -44,9 +52,18 @@ def _bias(sub, row, fit):
     return 100 * (sub[f"{row}_{fit}"] - sub[f"{row}_true"]) / sub[f"{row}_true"]
 
 
+# gamma_profile: each run's fit at its best grid γ, as bias in f, k and f/k by true γ.
+def gamma_fitted():
+    df = pd.concat([pd.read_csv(f) for f in glob.glob(str(RESULTS / "gamma_profile" / "runs_*.csv"))],
+                   ignore_index=True)
+    best = df.loc[df.groupby(["f_true", "k_true", "g_true", "rep"]).nll.idxmin()]
+    return best.rename(columns={"f_hat": "f_fitted", "k_hat": "k_fitted", "g_true": "level"})
+
+
 def fig5():
     fs.apply()
     runs = with_defaults(pd.read_csv(RESULTS / "misspecification" / "runs.csv"))
+    fitted = gamma_fitted()
 
     fig, axes = fs.figure(3, 4, width=7.4, height=7.8, sharex="col", sharey="row")
     for col, (factor, label, default) in enumerate(FACTORS):
@@ -65,6 +82,11 @@ def fig5():
                 ax.errorbar(g.mean().index, g.mean().values, yerr=2 * g.agg(se).values,
                             color=color, ls=ls, marker=marker, ms=6, mec="black", mew=0.6,
                             capsize=0, label=name)
+            if factor == "g":
+                g = _bias(fitted, row, "fitted").groupby(fitted.level)
+                ax.errorbar(g.mean().index, g.mean().values, yerr=2 * g.agg(se).values,
+                            color=fs.INK, ls=":", marker="D", ms=5, mec="black", mew=0.6,
+                            capsize=0, label=r"$\gamma$ fitted, with redo")
             if factor == "a":
                 ax.set_xscale("log")
                 ax.set_xticks([0.01, 0.05, 0.2], ["0.01", "0.05", "0.2"])
@@ -77,6 +99,6 @@ def fig5():
                 ax.set_ylabel(ylabel)
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.subplots_adjust(top=0.9)
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=3,
+    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=4,
                fontsize=10, handlelength=1.8, columnspacing=1.2)
     fs.save(fig, OUT / "fig5_misspecification")

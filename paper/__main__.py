@@ -6,7 +6,8 @@
 """
 import sys
 
-from . import controllers, explainers, identifiability, misspecification, model, shortcuts, task
+from . import (controllers, explainers, identifiability, misspecification, model, recovery,
+               shortcuts, task)
 from .common import OUT
 
 FIGURES = {
@@ -14,6 +15,7 @@ FIGURES = {
     "fig2": explainers.fig2,          # drift planes
     "fig3": explainers.fig3,          # patience (needs a recorded session)
     "fig4": model.fig4,               # recovery from one person
+    "fig4lhc": recovery.fig4lhc,      # recovery of f, k, γ, BOUND, T0 together
     "fig5": misspecification.fig5,    # the person's constants differ from the fit's
     "fig6": shortcuts.fig6,           # shortcuts in the fit
     "fig7": task.fig7,                # difficulty and feedback
