@@ -106,8 +106,7 @@ plot.
 
 ### Which difficulty and whether to show feedback; lockout
 
-**Which difficulty and whether to show feedback (2026-10-15).** Question-type task, skips
-on, one setting held for each run of 300 start decisions, review 0.25, skipped questions
+**2026-10-15.** Question-type task, skips on, one setting held for each run of 300 start decisions, review 0.25, skipped questions
 dropped, no controller. The target is the predicted chance of a right answer each
 question is aimed at; it is a prediction from the ratings, and the chance actually
 achieved was not recorded. γ = 0.9, `ACHIEVEMENT_SCALE = 4`, continuing bootstrap,
@@ -168,15 +167,17 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
   engagement if at most 4 of the 96 person × target cells fall below zero beyond 2 SE and
   none beyond 3 SE. **It holds: 0 cells below zero beyond 2 SE**, 87 of 96 positive. The
   per-person claim that it helps beyond 2 SE at every target where the person starts at
-  least 10% of the time held for 1 of 16; 16 seeds per cell are too few. Pooled over targets (descriptive), it raised P(start) beyond 2 SE
-  for 13 of 16 people, by 0.015 to 0.081; the other three have `k = 1.5` and barely start.
+  least 10% of the time held for 1 of 16; 16 seeds per cell are too few. Pooled over
+  targets (descriptive), it raised P(start) beyond 2 SE for 13 of 16 people, by 0.015 to
+  0.081; the other three have `k = 1.5` and barely start.
 - **By difficulty, over all 16 people** (256 paired runs per target): P(start) shown −
   hidden was +0.031, +0.034, +0.027, +0.039, +0.050, +0.044 at 90, 75, 60, 45, 30, 20%,
   each beyond 2 SE. Total reward shown − hidden was +1.0 ± 0.5, +1.4 ± 1.0, −0.2 ± 1.2,
   +2.6 ± 1.9, **+7.7 ± 2.1**, **+8.1 ± 1.8**: with feedback shown, people earn more at
   hard targets, where the one-person run above could not tell.
-- **Lockout (2026-10-15, `python -m experiments.lockout`).** Lockout is a run in which the person almost never starts
-  again (start rate below 0.10 over 300 decisions, defined before the run). Four
+- **Lockout (2026-10-15, `python -m experiments.lockout`).** Lockout is a run in which the
+  person almost never starts again (start rate below 0.10 over 300 decisions, defined
+  before the run). Four
   effort-averse people (f, k = 0.6/1.0, 0.6/1.2, 1.0/1.2, 1.0/1.5), targets 75, 60 and 45%,
   64 paired seeds each. Claims fixed before the run: pooled, lockout is more common with
   feedback hidden: **holds narrowly**, 11.6% against 9.1% of 768 runs, +0.025 ± 0.011
@@ -285,10 +286,10 @@ beyond 2 SE:
 
 ### Recovery
 
-**Recovery from one person (2026-10-10, `python -m experiments.recovery_sweep`).** One simulated person, mid cold-start cost,
-scheduled review, 1200 recorded decisions per fit split across four learners after 0,
-200, 500 and 1000 warm-up decisions, single-`diff` task, 4×4 grid × 3 reps (48 fits),
-95% bootstrap intervals over the fits:
+**Recovery from one person (2026-10-10, `python -m experiments.recovery_sweep`).** One
+simulated person, mid cold-start cost, scheduled review, 1200 recorded decisions per fit
+split across four learners after 0, 200, 500 and 1000 warm-up decisions, single-`diff`
+task, 4×4 grid × 3 reps (48 fits), 95% bootstrap intervals over the fits:
 
 | f RMSE | k RMSE |
 |---|---|
@@ -341,10 +342,9 @@ the redo prompts already carry that. So the controller fits `f` and `k` from dec
 and uses time on questions only for patience.
 
 **What each part of the fit contributes, alone and together (2026-10-15,
-`python -m experiments.fit_factorial`).** The 32 people
-of "Planning to measure" (4×4 grid × 2 seeds), question-type task, settings chosen by
-`InfoController`, 300 start decisions, with a true non-decision time of 0.3 s and true
-patience 10 s. Each dataset is fitted 8 ways: timed-out trials kept or dropped, `T0`
+`python -m experiments.fit_factorial`).** The 32 people of "Planning to measure" (4×4
+grid × 2 seeds), question-type task, settings chosen by `InfoController`, 300 start
+decisions, with a true non-decision time of 0.3 s and true patience 10 s. Each dataset is fitted 8 ways: timed-out trials kept or dropped, `T0`
 fitted or pinned at 0, answer and skip times added or not (at a fixed 10 s patience,
 their best case). Claims fixed before the run: a choice matters alone if switching only
 it worsens squared error beyond 2 SE; two interact if the bias of switching both differs
@@ -397,15 +397,14 @@ that reached a boundary and the optimizer inflates drift at no likelihood cost,
 shrinking the predicted undecided mass. The correction is to feed the censored counts
 back in as undecided trials. On the recovery design (48 fits of 1200 decisions, 4×4
 grid × 3 reps, four learners across the learning curve, `T_DUR = 7.0`, continuing
-bootstrap, 2026-10-10, `python -m experiments.recovery_sweep`), 6,032 of 57,600 decisions (10.5%) timed out. Kept as undecided,
-the mean bias was −0.2% for `f` and −0.5% for `k` (RMSE 0.035, 0.034). Dropped, it was
-+12.9% and +10.6% (RMSE 0.099, 0.099).
+bootstrap, 2026-10-10, `python -m experiments.recovery_sweep`), 6,032 of 57,600
+decisions (10.5%) timed out. Kept as undecided, the mean bias was −0.2% for `f` and
+−0.5% for `k` (RMSE 0.035, 0.034). Dropped, it was +12.9% and +10.6% (RMSE 0.099, 0.099).
 
 ### Non-decision time
 
-**Non-decision time** (`python -m temporal recovery
---mode t0 --reps 3`, 2026-10-20, seeded). One learner per run, 1200 decisions, 3 reps per value, true
-`f = k = 0.8`, current model. Each dataset is fitted twice: with `T0` pinned at 0 and
+`python -m temporal recovery --mode t0 --reps 3`, 2026-10-20, seeded. One learner per
+run, 1200 decisions, 3 reps per value, true `f = k = 0.8`, current model. Each dataset is fitted twice: with `T0` pinned at 0 and
 with `T0` free. Means over reps:
 
 | true T0 | f pinned | k pinned | f free | k free | T0 recovered |
@@ -426,8 +425,7 @@ with `T0` free. Means over reps:
 
 ### The person may not share the model's constants
 
-**The person may not share the model's constants.** The fit holds the discount factor γ
-at 0.9, the TD learning rate α at 0.05, `SIGMA` at 0.7 and `BOUND` at 1.5. Here each
+The fit holds the discount factor γ at 0.9, the TD learning rate α at 0.05, `SIGMA` at 0.7 and `BOUND` at 1.5. Here each
 simulated person differs from the model in one of the four, and the fit isn't told.
 
 γ and α never enter the fit directly. They set the person's learned value, and the app
@@ -441,7 +439,8 @@ the pinned values.
 The setup is the app's: question types with Elo ratings, skips on, and `InfoController`
 steering from the default setting. Each run has 300 start decisions plus their redo
 decisions. People (f, k) = (0.8, 0.8), (1.2, 0.4) and (0.6, 1.2), 5 seeds each, with the
-same seeds at every level (2026-10-21, `python -m experiments.misspecification`). Bias of the analyst fit is (estimate − true) / true, mean ± SE of 15 fits:
+same seeds at every level (2026-10-21, `python -m experiments.misspecification`). Bias of
+the analyst fit is (estimate − true) / true, mean ± SE of 15 fits:
 
 | person | bias in f | bias in k | bias in f / k | undecided |
 |---|---|---|---|---|
@@ -501,8 +500,8 @@ and `T_DUR = 7.0`.
 
 ### How value and cost decide what can be measured
 
-What correlation, and too little variation in cost, do cost is **precision**: more
-decisions for the same accuracy. Expected standard deviation from 300 start decisions,
+Correlation between value and cost, or too little variation in cost, costs **precision**
+instead: more decisions for the same accuracy. Expected standard deviation from 300 start decisions,
 from the Fisher information of the decisions at the true `f`, `k` (16 people × 2 seeds,
 default setting for starts, a fixed redo-prompt setting for starts with redos; medians;
 `python -m experiments.precision`):
@@ -553,8 +552,7 @@ expected. The correlation is a property of the task, not of the carry.
   and `f` is identified from variation in value. Re-measured under V3 on 2026-10-24: f =
   k = 0.8, default setting, 8 seeds × 400 start decisions, the same runs with
   `value.CONTINUING` switched. The V2 measurements, which put the spread at about twice
-  on the single-`diff` recovery task (sd 0.222 against 0.115),
-  and whether the switch moved the reward controller closer to the best fixed setting
+  on the single-`diff` recovery task (sd 0.222 against 0.115), and whether the switch moved the reward controller closer to the best fixed setting
   (it did not), are in `RETIRED.md`.
 - **Planning is about 3× faster.** One `InfoController` plan (96 settings × 6 draws
   × 25 decisions, f 0.8, k 0.8) took 15.3 s before this change and 4.6 s after it
@@ -887,8 +885,8 @@ parameters, 60 to 250 s with a refit. Replaced by the README's 4.6 s.
 ## V0 (engagement score, particle filter)
 
 The first model scored engagement from `f`, an effort cost and a boredom rate `b`, and
-estimated them with a particle filter. Recovery failed: in the last recorded sweep `b` came back near 0.94 whatever its true
-value. Replaced by the drift-diffusion model in May 2026.
+estimated them with a particle filter. Recovery failed: in the last recorded sweep `b`
+came back near 0.94 whatever its true value. Replaced by the drift-diffusion model in May 2026.
 
 ---
 

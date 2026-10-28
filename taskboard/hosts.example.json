@@ -1,0 +1,22 @@
+{
+  "hosts": [
+    {
+      "name": "mac",
+      "label": "This Mac (M5, 10 cores)",
+      "ssh": null,
+      "dir": null,
+      "slots": 9,
+      "env": "export PATH=$HOME/.local/bin:$PATH",
+      "tag": "mac"
+    },
+    {
+      "name": "reyrey",
+      "label": "reyrey (Ryzen 9 3900X, 24 threads)",
+      "ssh": "reyrey",
+      "dir": "~/temporal-run",
+      "slots": 23,
+      "env": "export PATH=$HOME/.local/bin:$PATH",
+      "tag": "server"
+    }
+  ]
+}

@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Taskboard</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --line: #dfe2e7; --text: #1b1f24; --muted: #69707a;
+  --accent: #2f6fde; --ok: #1f8a4c; --bad: #c7362b; --warn: #b7791f; --idle: #8a919b; --ext: #7c4dbd;
+  --track: #e8ebef; --code: #f2f4f7; --chip: #eef3fc; --shadow: 0 1px 2px rgb(0 0 0 / .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111317; --panel: #1a1d22; --line: #2b3038; --text: #e6e8eb; --muted: #959ca7;
+    --accent: #5b93f0; --ok: #3fb872; --bad: #ec6a5e; --warn: #e0a84a; --idle: #6d747e; --ext: #b08be6;
+    --track: #262a31; --code: #14171b; --chip: #1f2836; --shadow: none; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 14px 20px 0; flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; }
+.muted, header .sum { color: var(--muted); }
+header .spacer { flex: 1; }
+button, input, select { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.small { padding: 1px 7px; font-size: 12px; }
+input, select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+form.new { margin: 12px 20px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 9px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row > label, .opt { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; }
+#repo { max-width: 260px; } #script { flex: 1 1 300px; max-width: 640px; }
+#command { flex: 1 1 400px; }
+input[type=number] { width: 72px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { background: var(--chip); border: 1px solid transparent; border-radius: 6px; padding: 2px 8px; cursor: pointer;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.chip:hover { border-color: var(--accent); }
+details.opts summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+table.opts { border-collapse: collapse; font-size: 12.5px; margin-top: 6px; width: 100%; }
+table.opts td { padding: 3px 8px 3px 0; vertical-align: top; border-top: 1px solid var(--line); }
+table.opts td:first-child { white-space: nowrap; }
+.split { border: 1px dashed var(--line); border-radius: 8px; padding: 9px 10px; display: flex; flex-direction: column; gap: 7px; }
+.split[hidden] { display: none; }
+#values { flex: 1 1 200px; }
+.preview { font-size: 12px; color: var(--muted); }
+.preview div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preview b { color: var(--text); font-weight: 600; }
+.board { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; padding: 0 20px 30px; }
+.col { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 160px;
+  display: flex; flex-direction: column; box-shadow: var(--shadow); min-width: 0; }
+.col.drop { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.col > .head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.head .title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.head .title .grow { flex: 1; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); flex: none; }
+.dot.on { background: var(--ok); } .dot.off { background: var(--bad); }
+.head .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.meters { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px; align-items: center; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.bar { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+.bar.hot > i { background: var(--warn); }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.controls input { width: 52px; padding: 1px 5px; font-size: 12px; }
+.list { padding: 10px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.empty { color: var(--muted); font-size: 13px; text-align: center; padding: 18px 0; }
+.group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 6px 2px 0; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--panel); cursor: grab; min-width: 0; }
+.card.ext { border-left: 3px solid var(--ext); }
+.card.fin { opacity: .72; }
+.card .top { display: flex; align-items: center; gap: 8px; }
+.card .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+.s-running, .s-starting, .s-syncing { color: var(--accent); }
+.s-done { color: var(--ok); } .s-failed, .s-lost { color: var(--bad); }
+.s-stopping, .s-stopped, .s-paused { color: var(--warn); } .s-queued, .s-ended { color: var(--idle); }
+.s-hand { color: var(--ext); }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; font-size: 11px; color: var(--muted); }
+.tags span { background: var(--code); border-radius: 4px; padding: 0 5px; }
+.cmd { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prog { margin-top: 7px; }
+.prog .bar { height: 8px; }
+.prog .bar.ind > i { width: 30% !important; animation: slide 1.4s infinite ease-in-out; }
+@keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.nums { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.last { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: var(--code); border-radius: 4px;
+  padding: 3px 6px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.note { font-size: 12px; color: var(--warn); margin-top: 4px; }
+.actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; align-items: center; }
+.actions select { font-size: 12px; padding: 1px 4px; }
+dialog { width: min(1000px, 94vw); height: 80vh; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); padding: 0; }
+dialog::backdrop { background: rgb(0 0 0 / .4); }
+dialog .dh { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+dialog .dh b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog pre { margin: 0; padding: 12px 14px; height: calc(80vh - 50px); overflow: auto; font-size: 12px; background: var(--code); white-space: pre-wrap; word-break: break-all; }
+.err { color: var(--bad); font-size: 12px; margin-top: 4px; }
+@media (max-width: 600px) { header { padding: 12px 16px 0; } form.new { margin: 12px 16px; } .board { padding: 0 16px 20px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Taskboard</h1><span class="sum" id="sum"></span><span class="spacer"></span>
+  <button id="clear" title="Remove finished and stopped tasks (failed ones stay)">Clear finished</button>
+</header>
+
+<form class="new" id="new" autocomplete="off">
+  <div class="row">
+    <select id="repo" title="Which checkout to run: the main repo or a git worktree"></select>
+    <select id="script"></select>
+  </div>
+  <div class="chips" id="usage"></div>
+  <details class="opts" id="optsbox"><summary>Options</summary><table class="opts" id="opts"></table></details>
+  <div class="row">
+    <input id="command" class="mono" placeholder="command, run from the checkout" required>
+    <input id="name" placeholder="name (optional)" style="width:150px">
+  </div>
+  <div class="row">
+    <label>run on <select id="hostsel"></select></label>
+    <label title="TEMPORAL_WORKERS for each run. Blank means the whole computer.">workers <input id="slots" type="number" min="1" placeholder="all"></label>
+    <label>copies <input id="count" type="number" min="1" value="1"></label>
+    <label title="Before a remote run, rsync this checkout to the remote copy, but only if the code differs, and never while something else runs in it. results/, data/ and logs/ are left alone."><input id="sync" type="checkbox" checked> sync code first</label>
+    <label title="When a remote run finishes, copy the result files it wrote back into this checkout"><input id="fetch" type="checkbox" checked> copy results back</label>
+    <label><input id="splitOn" type="checkbox"> split across computers</label>
+  </div>
+  <div class="split" id="split" hidden>
+    <div class="row">
+      <label>split <select id="splitFlag"></select></label>
+      <input id="values" class="mono" placeholder="values: 0-99 or 0,1,2">
+    </div>
+    <div class="row">
+      <label><input type="radio" name="mode" value="hosts" checked> one piece per computer, sized by its slots:</label>
+      <span id="splitHosts" class="row"></span>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="mode" value="pieces"> <input id="pieces" type="number" min="2" value="4"> equal pieces; the first free computer takes the next</label>
+    </div>
+    <div class="row">
+      <label><input id="afterOn" type="checkbox"> when every piece is done, run on <select id="afterHost"></select></label>
+      <input id="after" class="mono" style="flex:1 1 300px" placeholder="e.g. uv run python -m experiments.x --replot">
+    </div>
+    <div class="muted" id="tagnote" style="font-size:12px"></div>
+  </div>
+  <div class="preview" id="preview"></div>
+  <div class="row"><button class="primary">Add</button><span class="err" id="formerr"></span></div>
+</form>
+
+<div class="board" id="board"></div>
+
+<dialog id="logbox">
+  <div class="dh"><b id="logtitle"></b><label class="muted"><input type="checkbox" id="follow" checked> follow</label><button id="logclose">Close</button></div>
+  <pre id="logtext"></pre>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const post = (url, body = {}) => fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(r => r.json());
+const LIVE = ["syncing", "starting", "running", "stopping"];
+const store = {get(k, d) { try { return JSON.parse(localStorage.getItem("tb-" + k)) ?? d; } catch { return d; } },
+               set(k, v) { try { localStorage.setItem("tb-" + k, JSON.stringify(v)); } catch {} }};
+let S = null, CAT = [], dragging = null, logId = null;
+
+function dur(s) {
+  if (s == null || !isFinite(s)) return "";
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m ${String(x).padStart(2, "0")}s` : `${x}s`;
+}
+const branchOf = repo => (S?.checkouts.find(c => c.path === repo) || {}).branch || repo;
+const hostOpts = (any = true) => (any ? `<option value="any">any computer</option>` : "") + S.hosts.map(h => `<option value="${esc(h.name)}">${esc(h.name)}</option>`).join("");
+
+// ---- the form: everything comes from the checkout's catalog
+
+const entry = () => CAT.find(e => e.module === $("#script").value);
+const flagsOf = e => (e?.options || []).filter(o => o.flags[0].startsWith("-"));
+const hasTag = () => flagsOf(entry()).some(o => o.flags.includes("--tag"));
+
+async function loadCatalog() {
+  const repo = $("#repo").value;
+  store.set("repo", repo);
+  CAT = await (await fetch(`/api/catalog?repo=${encodeURIComponent(repo)}`)).json();
+  const keep = store.get("script", "");
+  $("#script").innerHTML = CAT.map(e => `<option value="${esc(e.module)}">${esc(e.module)}${e.summary ? ": " + esc(e.summary.slice(0, 90)) : ""}</option>`).join("");
+  if (CAT.some(e => e.module === keep)) $("#script").value = keep;
+  pickScript(false);
+}
+
+function pickScript(fill = true) {
+  const e = entry();
+  store.set("script", $("#script").value);
+  if (!e) return;
+  $("#usage").innerHTML = e.usage.map(u => `<span class="chip" data-use="${esc(u)}" title="use this command">${esc(u)}</span>`).join("");
+  $("#opts").innerHTML = e.options.map(o => `<tr><td><span class="chip" data-flag="${esc(o.flags[0])}" title="add to the command">${esc(o.flags.join(", "))}</span></td>
+    <td class="muted">${o.sub ? `<i>${esc(o.sub)}</i> ` : ""}${esc(o.help || "")}${o.choices ? ` <span class="mono">{${esc(o.choices.join(", "))}}</span>` : ""}${o.default != null ? ` <span class="mono">default ${esc(o.default.length > 40 ? o.default.slice(0, 40) + "…" : o.default)}</span>` : ""}</td></tr>`).join("");
+  $("#optsbox").querySelector("summary").textContent = `Options (${e.options.length})`;
+  if (fill) $("#command").value = e.usage[0];
+  const flags = flagsOf(e).filter(o => !o.action && o.flags[0] !== "--tag");
+  $("#splitFlag").innerHTML = flags.map(o => `<option>${esc(o.flags[0])}</option>`).join("") || `<option value="">(no options to split)</option>`;
+  const best = flags.find(o => /[,-]/.test(o.default || "") || e.usage.some(u => new RegExp(`${o.flags[0]}[ =]\\S*[,-]`).test(u)));
+  if (best) $("#splitFlag").value = best.flags[0];
+  const replot = e.options.some(o => o.flags.includes("--replot"));
+  $("#after").value = replot ? `uv run python -m ${e.module} --replot` : "";
+  $("#afterOn").checked = replot;
+  pickSplitFlag();
+}
+
+function flagValue(cmd, flag) {
+  const m = cmd.match(new RegExp(`(?:^|\\s)${flag}(?:=|\\s+)(\\S+)`));
+  return m ? m[1] : null;
+}
+function setFlag(cmd, flag, value) {
+  const re = new RegExp(`(^|\\s)${flag}(=|\\s+)\\S+`);
+  return re.test(cmd) ? cmd.replace(re, `$1${flag}$2${value}`) : `${cmd} ${flag} ${value}`;
+}
+
+function pickSplitFlag() {
+  const e = entry(), flag = $("#splitFlag").value, o = flagsOf(e).find(o => o.flags[0] === flag);
+  let v = flagValue($("#command").value, flag) ?? o?.default ?? "";
+  const items = v.split(",");
+  const consecutive = items.length > 2 && items.every((x, i) => /^\d+$/.test(x) && +x === +items[0] + i);
+  const rangey = e?.usage.some(u => new RegExp(`${flag}[ =]\\d+-\\d+`).test(u)) || /\d+-\d+/.test(o?.help || "");
+  if (consecutive && rangey) v = `${items[0]}-${items.at(-1)}`;
+  $("#values").value = v;
+  preview();
+}
+
+function expand(s) {
+  s = s.trim();
+  const m = s.match(/^(\d+)-(\d+)$/);
+  if (m) { const a = +m[1], b = +m[2]; return {items: Array.from({length: Math.max(0, b - a + 1)}, (_, i) => String(a + i)), range: true}; }
+  return {items: s.split(",").map(x => x.trim()).filter(Boolean), range: false};
+}
+function chunks(items, weights) {  // contiguous pieces, sized by weight
+  const total = weights.reduce((a, b) => a + b, 0) || 1;
+  let start = 0, acc = 0;
+  return weights.map((w, i) => { acc += w; const end = i === weights.length - 1 ? items.length : Math.round(items.length * acc / total); const c = items.slice(start, end); start = end; return c; });
+}
+
+function plan() {  // the tasks the form would add
+  const cmd = $("#command").value.trim(), name = $("#name").value.trim(), host = $("#hostsel").value;
+  if (!cmd) return {tasks: []};
+  const copies = Math.max(1, +$("#count").value || 1);
+  if (!$("#splitOn").checked) {
+    return {tasks: Array.from({length: copies}, (_, i) => ({command: cmd, host, name: name && copies > 1 ? `${name} #${i + 1}` : name}))};
+  }
+  const flag = $("#splitFlag").value, {items, range} = expand($("#values").value);
+  if (!flag || !items.length) return {tasks: [], error: "nothing to split"};
+  const fmt = c => range ? `${c[0]}-${c.at(-1)}` : c.join(",");
+  const base = hasTag() ? setFlag(cmd, "--tag", "{host}") : cmd;
+  let pieces;
+  if (document.querySelector("input[name=mode]:checked").value === "hosts") {
+    const hs = [...document.querySelectorAll("#splitHosts input:checked")].map(i => S.hosts.find(h => h.name === i.value)).filter(Boolean);
+    if (!hs.length) return {tasks: [], error: "pick at least one computer"};
+    pieces = chunks(items, hs.map(h => h.capacity)).map((c, i) => ({c, host: hs[i].name}));
+  } else {
+    const n = Math.min(items.length, Math.max(2, +$("#pieces").value || 2));
+    pieces = chunks(items, Array(n).fill(1)).map(c => ({c, host}));
+  }
+  const label = name || entry()?.module.split(".").at(-1) || "run";
+  const tasks = pieces.filter(p => p.c.length).map(p => ({command: setFlag(base, flag, fmt(p.c)), host: p.host,
+    name: `${label} ${flag.replace(/^-+/, "")} ${fmt(p.c)}`}));
+  const group = {name: `${label} split by ${flag}`, after: $("#afterOn").checked ? $("#after").value : "", after_host: $("#afterHost").value};
+  return {tasks, group};
+}
+
+function preview() {
+  if (!S) return;
+  const p = plan();
+  $("#tagnote").textContent = $("#splitOn").checked && hasTag()
+    ? `--tag becomes {host}: each piece's computer tag (${S.hosts.map(h => `${h.name} → ${h.tag || h.name}`).join(", ")}), numbered if two pieces land on one computer.` : "";
+  $("#formerr").textContent = p.error || "";
+  $("#preview").innerHTML = p.tasks.length > 1 || $("#splitOn").checked
+    ? p.tasks.map(t => `<div><b>${esc(t.host)}</b> &nbsp;<span class="mono">${esc(t.command)}</span></div>`).join("") : "";
+}
+
+function renderFormHosts() {
+  const keep = $("#hostsel").value || store.get("host", "any");
+  $("#hostsel").innerHTML = hostOpts();
+  $("#hostsel").value = S.hosts.some(h => h.name === keep) ? keep : "any";
+  const ah = $("#afterHost").value || S.hosts.find(h => !h.ssh)?.name || "any";
+  $("#afterHost").innerHTML = hostOpts();
+  $("#afterHost").value = ah;
+  const checked = new Set([...document.querySelectorAll("#splitHosts input:checked")].map(i => i.value));
+  const first = !document.querySelector("#splitHosts input");
+  $("#splitHosts").innerHTML = S.hosts.map(h => `<label class="opt"><input type="checkbox" value="${esc(h.name)}" ${first ? (h.online !== false && !h.paused ? "checked" : "") : checked.has(h.name) ? "checked" : ""}> ${esc(h.name)} (${h.capacity})</label>`).join("");
+}
+
+$("#repo").addEventListener("change", loadCatalog);
+$("#script").addEventListener("change", () => pickScript(true));
+$("#splitFlag").addEventListener("change", pickSplitFlag);
+$("#splitOn").addEventListener("change", () => { $("#split").hidden = !$("#splitOn").checked; pickSplitFlag(); });
+$("#new").addEventListener("input", preview);
+$("#new").addEventListener("change", preview);
+$("#new").addEventListener("click", e => {
+  const d = e.target.dataset;
+  if (d.use) { $("#command").value = d.use; pickSplitFlag(); }
+  if (d.flag) { const c = $("#command"); if (!new RegExp(`(^|\\s)${d.flag}(\\s|=|$)`).test(c.value)) c.value = `${c.value} ${d.flag} `; c.focus(); preview(); }
+});
+$("#new").addEventListener("submit", async e => {
+  e.preventDefault();
+  const p = plan();
+  if (!p.tasks.length) { $("#formerr").textContent = p.error || "nothing to add"; return; }
+  const busy = S.tasks.filter(t => (LIVE.includes(t.status) || t.status === "queued") && t.repo === $("#repo").value);
+  const dup = p.tasks.find(n => busy.some(t => t.command === n.command));
+  const hand = p.tasks.find(n => S.external.some(x => !x.ended && x.command === n.command));
+  if (dup && !confirm(`"${dup.command}" is already queued or running from this checkout. Add it again anyway?`)) return;
+  if (hand && !confirm(`"${hand.command}" is already running (started by hand). Add it again anyway?`)) return;
+  store.set("host", $("#hostsel").value);
+  store.set("opts", {sync: $("#sync").checked, fetch: $("#fetch").checked});
+  const r = await post("/api/tasks", {repo: $("#repo").value, tasks: p.tasks, group: $("#splitOn").checked ? p.group : null,
+    slots: +$("#slots").value || 0, sync: $("#sync").checked, fetch: $("#fetch").checked});
+  if (r.error) { $("#formerr").textContent = r.error; return; }
+  $("#name").value = ""; $("#count").value = 1; $("#splitOn").checked = false; $("#split").hidden = true;
+  refresh();
+});
+
+// ---- the board
+
+function hostHead(h) {
+  const st = h.stats || {}, cores = st.cores || h.capacity;
+  const load = st.load != null ? Math.min(100, 100 * st.load / cores) : 0;
+  const mem = st.mem_total && st.mem_avail != null ? 100 * (1 - st.mem_avail / st.mem_total) : null;
+  const slots = h.capacity ? Math.min(100, 100 * h.used / h.capacity) : 0;
+  const dot = h.online == null ? "" : h.online ? "on" : "off";
+  let m = `<span>slots</span><div class="bar ${h.used > h.capacity ? "hot" : ""}"><i style="width:${slots}%"></i></div><span>${h.used}/${h.capacity}</span>`;
+  if (st.load != null) m += `<span>load</span><div class="bar ${load > 90 ? "hot" : ""}"><i style="width:${load}%"></i></div><span>${st.load.toFixed(1)} / ${cores}</span>`;
+  if (mem != null) m += `<span>memory</span><div class="bar ${mem > 90 ? "hot" : ""}"><i style="width:${mem}%"></i></div><span>${((st.mem_total - st.mem_avail) / 1024).toFixed(1)} / ${(st.mem_total / 1024).toFixed(0)} GB</span>`;
+  if (st.gpu) m += `<span>GPU</span><div class="bar"><i style="width:${st.gpu[0]}%"></i></div><span>${st.gpu[0]}% · ${(st.gpu[1] / 1024).toFixed(1)} GB</span>`;
+  return `<div class="head">
+    <div class="title"><span class="dot ${dot}"></span><span class="grow">${esc(h.name)}</span>
+      <span class="muted" style="font-weight:400;font-size:12px">tag ${esc(h.tag || h.name)}</span>
+      ${h.paused ? '<span class="pill s-paused">paused</span>' : ""}</div>
+    <div class="sub">${esc(h.label || "")}${h.ssh ? ` · ${esc(h.dir)}${h.synced ? ` (code from ${esc(branchOf(h.synced))})` : ""}` : ""}</div>
+    ${h.online === false ? `<div class="err">offline: ${esc(h.error)}</div>` : ""}
+    <div class="meters">${m}</div>
+    <div class="controls">
+      <span>slots</span><input type="number" min="0" value="${h.capacity}" data-cap="${esc(h.name)}">
+      <button class="small" data-pause="${esc(h.name)}">${h.paused ? "Resume" : "Pause"}</button>
+      ${h.ssh ? `<button class="small" data-sync="${esc(h.name)}" title="rsync the checkout picked above to ${esc(h.dir)}">Sync code</button>` : ""}
+      <span>${esc(h.sync || "")}</span>
+    </div></div>`;
+}
+
+function progressBlock(p, live, done, started, end, eta, status) {
+  if (!live && !p) return "";
+  const pct = p ? 100 * p[0] / p[1] : 0;
+  const nums = p ? (p[1] === 100 ? `${p[0]}%` : `${p[0]} / ${p[1]} · ${pct.toFixed(0)}%`) : status;
+  return `<div class="prog"><div class="bar ${live && !p ? "ind" : ""}"><i style="width:${done ? 100 : pct}%"></i></div>
+    <div class="nums"><span>${nums}</span><span>${started ? dur(end - started) : ""}${eta != null ? ` · ~${dur(eta)} left` : ""}</span></div></div>`;
+}
+
+function card(t) {
+  const live = LIVE.includes(t.status), fin = !live && t.status !== "queued";
+  const where = t.assigned && t.assigned !== t.host && live ? ` on ${esc(t.assigned)}` : "";
+  const g = t.group && S.groups[t.group];
+  const tags = [t.repo !== S.root ? `branch ${branchOf(t.repo)}` : "", t.commit ? `commit ${t.commit}${t.changed?.length ? " + changes" : ""}` : "", g ? `piece of: ${g.name}` : "", t.slots ? `${t.slots} workers` : "all cores", t.attempt > 1 ? `attempt ${t.attempt}` : ""].filter(Boolean);
+  const last = (t.tail || []).at(-1);
+  return `<div class="card ${fin ? "fin" : ""}" draggable="true" data-id="${t.id}">
+    <div class="top"><span class="name" title="${esc(t.name)}">${esc(t.name)}</span>
+      <span class="pill s-${t.status}">${t.status}${where}${(t.status === "failed" || t.status === "lost") && t.exit != null ? ` (${t.exit})` : ""}</span></div>
+    <div class="cmd" title="${esc(t.ran || t.command)}">${esc(t.ran || t.command)}</div>
+    <div class="tags">${tags.map(x => `<span>${esc(x)}</span>`).join("")}</div>
+    ${progressBlock(t.progress, live, t.status === "done", t.started, fin ? t.ended : S.now, t.eta, t.status)}
+    ${last && live ? `<div class="last" title="${esc(last)}">${esc(last)}</div>` : ""}
+    ${t.note ? `<div class="note">${esc(t.note)}</div>` : ""}
+    ${t.changed?.length ? `<div class="note" title="${esc(t.changed.join("\n"))}">ran with uncommitted code (${esc(t.changed.slice(0, 3).join(", "))}${t.changed.length > 3 ? ", …" : ""}): commit it before a result from this run goes in the README</div>` : ""}
+    ${t.waiting ? `<div class="muted" style="font-size:12px;margin-top:4px">waiting: ${esc(t.waiting)}</div>` : ""}
+    <div class="actions">
+      ${t.rid ? `<button class="small" data-log="${t.id}">Log</button>` : ""}
+      ${live || t.status === "queued" ? `<button class="small" data-stop="${t.id}">${t.status === "queued" ? "Cancel" : "Stop"}</button>` : ""}
+      ${t.status === "queued" ? `<button class="small" data-top="${t.id}">Run next</button>` : ""}
+      ${fin ? `<button class="small" data-retry="${t.id}">Run again</button><button class="small" data-remove="${t.id}">Remove</button>` : ""}
+      <select data-move="${t.id}"><option value="">move to…</option>${hostOpts()}</select>
+    </div></div>`;
+}
+
+function extCard(x) {
+  const live = !x.ended, last = (x.tail || []).at(-1);
+  const tags = [x.repo ? `branch ${branchOf(x.repo)}` : "", `${x.workers} workers`, `pid ${x.pid}`].filter(Boolean);
+  return `<div class="card ext ${live ? "" : "fin"}" draggable="${live}" data-ext="${esc(x.key)}">
+    <div class="top"><span class="name">${esc(x.command.replace(/^uv run python -m /, "").replace(/^experiments\./, ""))}</span>
+      <span class="pill ${live ? (x.stopping ? "s-stopping" : "s-hand") : "s-ended"}">${live ? (x.stopping ? "stopping" : "started by hand") : "ended"}</span></div>
+    <div class="cmd" title="${esc(x.command)} (in ${esc(x.cwd)})">${esc(x.command)}</div>
+    <div class="tags">${tags.map(t => `<span>${esc(t)}</span>`).join("")}</div>
+    ${progressBlock(x.progress, live, false, x.started, x.ended || S.now, x.eta, x.log ? "running" : "running (output not in a file, no progress)")}
+    ${last && live ? `<div class="last" title="${esc(last)}">${esc(last)}</div>` : ""}
+    ${live ? `<div class="actions">
+      ${x.log ? `<button class="small" data-xlog="${esc(x.key)}">Log</button>` : ""}
+      ${x.stopping ? "" : `<button class="small" data-xstop="${esc(x.key)}">Stop</button>
+      <select data-xmove="${esc(x.key)}"><option value="">move to…</option>${hostOpts()}</select>`}</div>` : ""}
+  </div>`;
+}
+
+function column(key, head, tasks, ext) {
+  const active = tasks.filter(t => LIVE.includes(t.status));
+  const queued = tasks.filter(t => t.status === "queued");
+  const fin = tasks.filter(t => !LIVE.includes(t.status) && t.status !== "queued").sort((a, b) => (b.ended || 0) - (a.ended || 0));
+  const xl = ext.filter(x => !x.ended), xf = ext.filter(x => x.ended);
+  const part = (label, html) => html ? `<div class="group">${label}</div>` + html : "";
+  const body = tasks.length || ext.length
+    ? part("running", xl.map(extCard).join("") + active.map(card).join("")) + part("queued", queued.map(card).join(""))
+      + part("finished", xf.map(extCard).join("") + fin.map(card).join(""))
+    : `<div class="empty">${key === "any" ? "Tasks for any computer wait here until one has free slots." : "Drop a task here to run it on this computer."}</div>`;
+  return `<section class="col" data-host="${esc(key)}">${head}<div class="list">${body}</div></section>`;
+}
+
+function render() {
+  if (!S) return;
+  if (document.activeElement?.matches?.("#board select, #board input")) return;  // don't yank a control mid-use
+  const byHost = k => S.tasks.filter(t => (LIVE.includes(t.status) || (t.status !== "queued" && t.assigned)) ? t.assigned === k : t.host === k);
+  const anyHead = `<div class="head"><div class="title"><span class="dot"></span><span class="grow">Waiting for any computer</span></div>
+    <div class="sub">Starts on whichever computer has free slots first.</div></div>`;
+  $("#board").innerHTML = column("any", anyHead, byHost("any"), [])
+    + S.hosts.map(h => column(h.name, hostHead(h), byHost(h.name), S.external.filter(x => x.host === h.name))).join("");
+  const n = s => S.tasks.filter(t => s.includes(t.status)).length, hand = S.external.filter(x => !x.ended).length;
+  $("#sum").textContent = `${n(LIVE)} running · ${n(["queued"])} queued · ${n(["done"])} done · ${n(["failed", "lost"])} failed` + (hand ? ` · ${hand} started by hand` : "");
+}
+
+async function refresh() {
+  try { S = await (await fetch("/api/state")).json(); }
+  catch { $("#sum").textContent = "server not reachable"; return; }
+  if (!$("#repo").options.length) {
+    $("#repo").innerHTML = S.checkouts.map(c => `<option value="${esc(c.path)}">${esc(c.branch)}${c.path === S.root ? "" : " · " + esc(c.path.split("/").at(-1))}</option>`).join("");
+    const keep = store.get("repo", S.root);
+    $("#repo").value = S.checkouts.some(c => c.path === keep) ? keep : S.root;
+    const o = store.get("opts", {sync: true, fetch: true});
+    $("#sync").checked = o.sync; $("#fetch").checked = o.fetch;
+    renderFormHosts();
+    await loadCatalog();
+  } else if (!document.activeElement?.closest?.("#new")) renderFormHosts();
+  render();
+  preview();
+}
+
+function confirmMove(id, host) {
+  const t = S.tasks.find(t => t.id === id);
+  if (!t || (LIVE.includes(t.status) && t.assigned === host)) return;
+  if (LIVE.includes(t.status) && !confirm(`"${t.name}" is ${t.status} on ${t.assigned}. Moving it stops it there and starts it from the beginning on ${host === "any" ? "the first free computer" : host}. Go ahead?`)) return;
+  post(`/api/tasks/${id}/move`, {host}).then(refresh);
+}
+function confirmExtMove(key, host) {
+  const x = S.external.find(x => x.key === key);
+  if (!x || x.host === host) return;
+  if (!confirm(`"${x.command}" was started by hand on ${x.host}. Moving it stops it there and starts it again on ${host === "any" ? "the first free computer" : host}, with --tag set to that computer's tag. Work it saved to files is kept only if the script skips what's done. Go ahead?`)) return;
+  post(`/api/external/${encodeURIComponent(key)}/move`, {host}).then(refresh);
+}
+
+$("#board").addEventListener("click", e => {
+  const d = e.target.dataset;
+  if (d.log) openLog(d.log, S.tasks.find(t => t.id === d.log));
+  else if (d.xlog) openLog(d.xlog, S.external.find(x => x.key === d.xlog));
+  else if (d.stop) { const t = S.tasks.find(t => t.id === d.stop);
+    if (t.status === "queued" || confirm(`Stop "${t.name}" on ${t.assigned}?`)) post(`/api/tasks/${d.stop}/stop`).then(refresh); }
+  else if (d.xstop) { const x = S.external.find(x => x.key === d.xstop);
+    if (confirm(`Stop "${x.command}" (pid ${x.pid} and its ${x.workers} workers) on ${x.host}? It was started by hand, not from here.`)) post(`/api/external/${encodeURIComponent(d.xstop)}/stop`).then(refresh); }
+  else if (d.top) post(`/api/tasks/${d.top}/top`).then(refresh);
+  else if (d.retry) { const t = S.tasks.find(t => t.id === d.retry); post(`/api/tasks/${d.retry}/move`, {host: t.host}).then(refresh); }
+  else if (d.remove) post(`/api/tasks/${d.remove}/remove`).then(refresh);
+  else if (d.pause) { const h = S.hosts.find(h => h.name === d.pause); post(`/api/hosts/${d.pause}`, {paused: !h.paused}).then(refresh); }
+  else if (d.sync) post(`/api/hosts/${d.sync}/sync`, {repo: $("#repo").value}).then(refresh);
+});
+$("#board").addEventListener("change", e => {
+  const d = e.target.dataset, v = e.target.value;
+  if (d.move && v) { e.target.blur(); confirmMove(d.move, v); }
+  if (d.xmove && v) { e.target.blur(); confirmExtMove(d.xmove, v); }
+  if (d.cap) { e.target.blur(); post(`/api/hosts/${d.cap}`, {capacity: +v}).then(refresh); }
+});
+$("#board").addEventListener("dragstart", e => { const c = e.target.closest(".card"); if (c) { dragging = c.dataset.id ? {id: c.dataset.id} : {ext: c.dataset.ext}; e.dataTransfer.effectAllowed = "move"; } });
+$("#board").addEventListener("dragover", e => { const col = e.target.closest(".col"); if (dragging && col) { e.preventDefault(); document.querySelectorAll(".col.drop").forEach(c => c !== col && c.classList.remove("drop")); col.classList.add("drop"); } });
+$("#board").addEventListener("dragleave", e => { const col = e.target.closest(".col"); if (col && !col.contains(e.relatedTarget)) col.classList.remove("drop"); });
+$("#board").addEventListener("drop", e => {
+  e.preventDefault();
+  const col = e.target.closest(".col");
+  document.querySelectorAll(".col.drop").forEach(c => c.classList.remove("drop"));
+  if (dragging && col) dragging.id ? confirmMove(dragging.id, col.dataset.host) : confirmExtMove(dragging.ext, col.dataset.host);
+  dragging = null;
+});
+$("#board").addEventListener("dragend", () => { dragging = null; document.querySelectorAll(".col.drop").forEach(c => c.classList.remove("drop")); });
+$("#clear").addEventListener("click", () => post("/api/tasks/clear").then(refresh));
+
+async function openLog(id, x) {
+  logId = id;
+  $("#logtitle").textContent = `${x.name || x.command} · ${x.assigned || x.host || ""}`;
+  $("#logtext").textContent = "loading…";
+  $("#logbox").showModal();
+  await pullLog(true);
+}
+async function pullLog(first) {
+  if (!logId || !$("#logbox").open) return;
+  const pre = $("#logtext"), atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+  pre.textContent = await (await fetch(`/api/log?id=${encodeURIComponent(logId)}`)).text();
+  if ($("#follow").checked && (first || atEnd)) pre.scrollTop = pre.scrollHeight;
+}
+$("#logclose").addEventListener("click", () => $("#logbox").close());
+$("#logbox").addEventListener("close", () => { logId = null; });
+
+refresh();
+setInterval(refresh, 2000);
+setInterval(() => pullLog(false), 3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# personal: copy hosts.example.json to hosts.json
+hosts.json
+state.json
+state.tmp
+state.lock
