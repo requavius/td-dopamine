@@ -1125,6 +1125,56 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
   the crossover is absent. The earlier result that pointed to a flip at 30% is in
   `RETIRED.md`.
 
+#### γ changes what feedback does (2026-10-28)
+
+With feedback shown, each right answer's reward lands when it is answered; with it
+hidden, the set pays at its end. Value discounts slot j of a set by γ^j, so hiding
+feedback should cost a steep discounter more than a patient one. A seen miss also
+produces a negative error that an unseen one does not, which pushes the other way, so the
+direction was tested, not assumed. The task above (300 ticks, review 0.25, skipped
+questions dropped, no redo prompts, no controller) with the person's γ at 0.6, 0.7, 0.8,
+0.9 and 0.95 (α 0.05), the five people of the first table, targets 75% and 45%, feedback
+shown and hidden, 96 seeds paired across every factor; run with
+`python -m experiments.gamma_feedback`. d(γ) is P(start) shown − hidden, each seed's
+value the mean over the ten person × target cells. Claims fixed before the run: **E1**
+d(0.7) − d(0.95) > 0 beyond 2 SE; **E2** the slope of d on γ is negative beyond 2 SE; a
+fail would have been read as inconclusive if baseline P(start) at γ 0.7 were below 0.15.
+
+| | γ 0.6 | γ 0.7 | γ 0.8 | γ 0.9 | γ 0.95 |
+|---|---|---|---|---|---|
+| baseline P(start), feedback shown | 0.652 | 0.699 | 0.768 | 0.874 | 0.935 |
+| d(γ), P(start) | **+0.052 ± 0.003** | **+0.058 ± 0.004** | **+0.046 ± 0.004** | **+0.024 ± 0.003** | **+0.009 ± 0.003** |
+| d(γ) ÷ baseline | +0.079 | +0.082 | +0.059 | +0.027 | +0.009 |
+| d(γ), target 75% | +0.050 ± 0.006 | +0.057 ± 0.006 | +0.044 ± 0.005 | +0.019 ± 0.004 | +0.006 ± 0.003 |
+| d(γ), target 45% | +0.054 ± 0.005 | +0.059 ± 0.005 | +0.048 ± 0.005 | +0.029 ± 0.004 | +0.013 ± 0.004 |
+| total reward, shown − hidden | +11.6 ± 0.5 | +16.1 ± 0.6 | +14.0 ± 0.9 | +5.1 ± 0.9 | +2.6 ± 0.9 |
+| share of ticks away, shown − hidden | −0.070 ± 0.002 | −0.103 ± 0.003 | −0.115 ± 0.004 | −0.064 ± 0.005 | −0.023 ± 0.006 |
+
+- **E1 holds**: d(0.7) − d(0.95) = +0.049 ± 0.004. **E2 holds**: the slope of d on γ is
+  −0.129 ± 0.010 per unit γ. Showing feedback raises engagement about six times as much
+  for a person whose γ is 0.7 as for one whose γ is 0.95, at both targets, and the same
+  holds for reward (+13.5 ± 1.0 more at 0.7 than at 0.95) and time away (−0.079 ± 0.006).
+  At γ 0.9 the pooled d, +0.024, matches the five-person result above (+0.024 over six
+  targets), as it should: those runs are the same design at γ 0.9, with other seeds and
+  six targets.
+- **Below 0.7 it levels off.** d(0.6) − d(0.7) = −0.006 ± 0.004, within 2 SE: no evidence
+  of a peak, but no further rise either. Baseline P(start) at 0.6 is 0.65, not a floor.
+- **Per person it is not universal.** d falls from γ 0.7 to 0.95 for four of the five
+  people (by 0.045 to 0.092). For f 0.6, k 1.2 it is flat, +0.019 to +0.030 at every γ.
+- **A ceiling is the obvious objection, and it does not explain the result, though it
+  limits it** (checked after the results were known, no claim). Baseline P(start) at γ
+  0.95 is 0.94, so d there may be small partly for lack of room. Dividing each cell's d by
+  its headroom, 1 − P(start, hidden), the contrast 0.7 − 0.95 is still +0.19 ± 0.03. But
+  the one person with real headroom at γ 0.95 (f 0.6, k 1.2, P(start) hidden 0.81) is the
+  one whose d does not depend on γ, so no ceiling-free cell shows the effect; it rests on
+  the four people who approach the ceiling at high γ.
+- **What it means for a person.** Feedback shown is the better setting at every γ here;
+  what γ changes is how much it matters. For a steep discounter it is worth about 0.05 in
+  P(start) and 10 points of time away; for γ 0.95 it is nearly irrelevant.
+- **The human version needs a score screen first.** The simulator pays the end-of-set
+  reward when feedback is hidden; the app shows no end-of-set score, so a hidden-feedback
+  set there pays nothing visible at all, and this comparison does not yet describe it.
+
 ### Measuring against planning for reward
 
 **Decision rule for controller comparisons, fixed on 2026-09-13.**
@@ -1648,10 +1698,13 @@ probed runs).
    - `stage_amt` is not a lever yet, and show count / show score have no model channel.
    - **Plan with fitted γ and bound.** Estimate `(f, k, γ, BOUND, T0)` with the closed-form
      likelihood, replay value at candidate γ, draw γ and the bound in the rollouts, and
-     include them in the information score. In the model, hidden feedback delays reward,
-     so it should cost a steep discounter more than a patient person: γ would give the
-     controller a reason to choose feedback per person. Then compare it with the current
-     controller on people whose γ and bound vary, claims fixed before the run.
+     include them in the information score. Hiding feedback costs a steep discounter
+     more: in P(start), 0.058 at γ 0.7 against 0.009 at γ 0.95, and in reward 16.1
+     against 2.6 ("γ changes what feedback does"). Showing it was still the better setting
+     at every γ, so γ changes how much the feedback choice matters per person, not which
+     way it goes; that matters to a controller trading feedback against measurement. Then
+     compare it with the current controller on people whose γ and bound vary, claims
+     fixed before the run.
 
 9. Online re-estimation. Parameters drift within a session with fatigue, mood and
    boredom, so the controller must track them rather than fit once.
@@ -1737,6 +1790,7 @@ several.
 | The coupled recovery plot | `python -m temporal recovery --mode coupled --reps 3` | `assets/initiation_recovery_coupled.png` |
 | Fitting the discount factor | `python -m experiments.gamma_profile` (split by `--gammas`, `--reps`, `--tag`) | `results/gamma_profile/runs_*.csv` |
 | γ when α, `BOUND` or the reward differ from the fit's | `python -m experiments.gamma_robustness` | `results/gamma_robustness/runs_*.csv` |
+| γ changes what feedback does | `python -m experiments.gamma_feedback` | `results/gamma_feedback/` |
 | Intervals beside the controller comparison and the five-person feedback result (no simulation) | `python -m experiments.intervals` | `results/intervals.txt` |
 
 The `temporal recovery` sweeps print their tables as they finish; they have no `--replot`,
