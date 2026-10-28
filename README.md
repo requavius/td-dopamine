@@ -877,7 +877,9 @@ mean ± SE over the 15 runs of a cell, or the 60 runs pooled.
 - **With γ fitted, `f` and `k` are unbiased**: +0.3 ± 0.5% and −0.5 ± 0.7% pooled, no
   person off by more than 12%.
 - **What it does not show.** Every true γ was a grid point, so "the estimate is the
-  truth" means correct to the grid's resolution (0.05 to 0.1), not a measured precision.
+  truth" means correct to the grid's resolution (0.05 to 0.1), not a measured precision;
+  fitted continuously, with the bound and `T0` free as well, γ is measured to about ±0.03
+  ("The bound can be fitted").
   Every person shared α, `BOUND`, `SIGMA` and the reward with the fit, the best case;
   `experiments.gamma_robustness` changes each in turn. The simulated person is paid the
   end-of-set reward with feedback hidden, which the app does not yet show. Only three
@@ -964,7 +966,40 @@ truth; **L4**, report the correlation of γ with `f` from the inverse Fisher inf
 - **Calibration.** For each parameter, `z = (estimate − true) / SE`. If the SEs are
   honest, `z` is close to standard normal: SD near 1 and about 95% of `|z|` under 1.96.
 
-**Results:** the simulations are running.
+**Results** (2026-10-28; histories in `results/recovery_lhc/histories/`, fits in
+`results/recovery_lhc/fits.csv`). 100 people, 722 recorded decisions each on average
+(389 to 878; 422 of them redo decisions).
+
+| | RMSE | bias (mean of recovered − true) | r | SD of z, observed | coverage, observed | SD of z, Fisher | coverage, Fisher |
+|---|---|---|---|---|---|---|---|
+| `f` | 0.062 | −0.005 ± 0.006 | 0.987 | 0.97 | 89/93 (95.7%) | 0.98 | 91/93 (97.8%) |
+| `k` | 0.054 | +0.013 ± 0.005 | 0.991 | 0.96 | 88/93 (94.6%) | 0.97 | 88/93 (94.6%) |
+| γ | 0.028 | +0.001 ± 0.003 | 0.969 | 1.09 | 87/93 (93.5%) | 1.08 | 88/93 (94.6%) |
+| `BOUND` | 0.045 | +0.002 ± 0.005 | 0.988 | 1.18 | 86/93 (92.5%) | 1.18 | 85/93 (91.4%) |
+| `T0` (s) | 0.040 | +0.003 ± 0.004 | 0.946 | 1.14 | 83/93 (89.2%) | 1.10 | 84/93 (90.3%) |
+
+- **L1: all five are recovered together.** r is 0.946 to 0.991, and four of the five
+  biases are within 2 SE of zero. `k` is the exception: +0.013 ± 0.005, 2.45 SE, small
+  against its range (0.2 to 1.5) but detectable. A likely source, not tested, is the
+  rounding the fit does not see: the person's draws used value rounded to 0.05.
+- **γ is measured to about ±0.03** (RMSE 0.028), continuously rather than on a grid.
+- **L2 does not hold, on one number.** With standard errors from the observed
+  information, every SD of z is inside 0.8 to 1.25 and four coverages are inside 90 to
+  98%, but `T0`'s is 89.2% (83 of 93): its error bars are slightly too narrow.
+- **L3 holds.** With standard errors from the Fisher information at the truth, every SD
+  of z is 0.97 to 1.18 and every coverage 90.3 to 97.8%.
+- **L4.** The correlation of γ with `f` in the inverse Fisher information has a median of
+  −0.73 (5th to 95th percentile −0.88 to −0.47; −0.75 from the observed information): a
+  higher γ and a lower `f` partly trade off, which the standard errors already carry.
+- **Seven fits sat at a parameter bound** and were left out of L2 and L3 as fixed
+  before the run (they count in L1). Six had a true `T0` of 0.06 s or less, fitted at
+  0; one had γ fitted at 0.5 against a true 0.61, a person with `f` 0.26, whose decisions
+  carry little value signal.
+- **The current way of fitting does far worse on the same data.** With γ held at 0.9
+  and `BOUND` at 1.5, `f` has RMSE 0.469 and bias −0.274 ± 0.038 (all five free: 0.062),
+  and `k` RMSE 0.262 and bias +0.098 ± 0.024 (all free: 0.054).
+- **The finite-difference step does not matter**: the median ratio of γ's SE at half the
+  step to its SE at the step is 0.999.
 
 ### Which difficulty and whether to show feedback
 
@@ -1413,7 +1448,8 @@ fits used γ = 0.9, `ACHIEVEMENT_SCALE = 4`, the continuing bootstrap and `T_DUR
 - **`BOUND` does not have to be.** With the noise as the unit, the bound has its own
   signature: it widens the RT distributions and makes choices more consistent without
   changing which way they lean. It is pinned at 1.5 in every fit except where it is
-  fitted per person ("The bound can be fitted"). Pinning it at the wrong value costs
+  fitted per person, and there it is recovered to RMSE 0.045 (r 0.988) with `f`, `k`, γ
+  and `T0` free ("The bound can be fitted"). Pinning it at the wrong value costs
   `f` and `k` together: a person whose bound is 1.0 gets `f` 57% and `k` 71% too high,
   though their ratio stays within 8% (see "The person may not share the model's
   constants").
