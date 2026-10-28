@@ -874,13 +874,26 @@ likelihood-ratio interval inside ±0.1) in at least 80% of runs.
   `experiments.gamma_robustness` changes each in turn. The simulated person is paid the
   end-of-set reward with feedback hidden, which the app does not yet show. Only three
   combinations of `f` and `k` were run.
-- **When other constants are wrong (`python -m experiments.gamma_robustness`, seed 0 of
-  the bound and reward levels so far).** Claim fixed before the run, **R1**: the estimate
-  is within one grid step of the truth in at least 80% of runs at every level. With the
-  person's `BOUND` at 1.0 or 2.0, or a person who values the fraction right instead of
-  `1 − p`, the estimate was the true γ in 17 of 18 runs and its neighbour in one: R1 holds
-  so far. `f` is not protected: a wrong bound scales `f` and `k` (+54 to +60% at 1.0, −27%
-  at 2.0), and the fraction-right person gets `f` 46 to 54% too low even with γ fitted.
+- **When other constants are wrong (`python -m experiments.gamma_robustness`).** The same
+  task, people and grid; each person differs from the fit in one more constant, and the
+  fit is not told. True γ 0.8 and 0.95, 2 seeds per person (6 runs per cell), seeds
+  distinct from the profile runs. Claim fixed before the run, **R1**: the estimate is
+  within one grid step of the truth in at least 80% of runs at every level.
+
+  | person differs in | true γ | estimate | `f` bias at the estimate | `k` bias at the estimate | `f` bias, γ held at 0.9 |
+  |---|---|---|---|---|---|
+  | `BOUND` 1.0 | 0.8 | 6 of 6 exact | +58 ± 7% | +57 ± 5% | −11 ± 4% |
+  | `BOUND` 1.0 | 0.95 | 6 of 6 exact | +52 ± 2% | +47 ± 6% | +145 ± 4% |
+  | `BOUND` 2.0 | 0.8 | 6 of 6 exact | −28 ± 1% | −27 ± 1% | −61 ± 1% |
+  | `BOUND` 2.0 | 0.95 | 6 of 6 exact | −26 ± 1% | −26 ± 1% | +17 ± 1% |
+  | values the fraction right, not `1 − p` | 0.8 | 4 exact, 2 one step off | −52 ± 4% | −22 ± 8% | −73 ± 2% |
+  | values the fraction right, not `1 − p` | 0.95 | 6 of 6 exact | −54 ± 3% | −22 ± 8% | −25 ± 5% |
+
+  **R1 holds at every level** (36 runs). γ survives a wrong bound and a wrong reward;
+  `f` and `k` do not. A wrong bound scales both by about the same factor, which fitting
+  the bound removes ("The bound can be fitted"). A person who values the fraction right
+  gets `f` about half its true value even with γ fitted, and no fitted parameter absorbs
+  that. The learning-rate levels are running.
 
 ### The bound can be fitted: f, k, γ, BOUND and T0 together
 
