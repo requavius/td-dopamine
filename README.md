@@ -659,8 +659,9 @@ in `RETIRED.md` by model version. Recovery runs sweep a 4×4 grid over
 
 ### Reporting conventions
 
-`f` is identified only up to the discount factor γ, `ACHIEVEMENT_SCALE` and the value
-bootstrap. Every result here was measured with γ = 0.9, `ACHIEVEMENT_SCALE = 4`, the
+`f` is identified only up to `ACHIEVEMENT_SCALE` and the value bootstrap, and up to the
+discount factor γ unless γ is fitted (see "Fitting the discount factor"). Every result
+here except that one was measured with γ held at 0.9, `ACHIEVEMENT_SCALE = 4`, the
 continuing bootstrap and `T_DUR = 7.0`, and numbers are not comparable across model
 versions.
 
@@ -807,6 +808,51 @@ missed question is, and a controller that seeks out redo prompts brought `k` RMS
 single-`diff` task redo cost barely varies, and stacking redo draws did little (V1
 measurement in `RETIRED.md`).
 
+### Fitting the discount factor (2026-10-28)
+
+Every other result in this section holds γ at 0.9. A person whose γ differs gets `f`
+biased by −62% (γ 0.7) to +57% (γ 0.95) on the app's task (Figure 5a), because a wrong γ
+mostly rescales value and `f` absorbs the rescaling. Fitting γ removes that bias.
+
+**Design** (`python -m experiments.gamma_profile`). The app's task: question types with
+Elo ratings, skips on, `InfoController` steering from the default setting, 300 start
+decisions plus their redo decisions (about 420 per person). People (f, k) = (0.8, 0.8),
+(1.2, 0.4), (0.6, 1.2), true γ 0.7, 0.8, 0.9, 0.95, 5 seeds each: 60 people. The person
+learns at their own γ; shadow TD learners at each γ of a grid (0.5, 0.6, 0.7, 0.8, 0.85,
+0.9, 0.95, 0.99) run on the same rewards, as the app could replay a person's record, and
+give each recorded decision's value under that γ. `(f, k)` is fitted at every grid γ;
+the γ with the lowest −log L is the estimate. α 0.05, `BOUND` 1.5, `SIGMA` 0.7 and `T0` 0
+for person and fit alike, so γ is the only constant that differs. Claims fixed before
+the run: **P1**, the estimate is the true γ or its grid neighbour in at least 80% of runs;
+**P2**, every grid γ more than 0.1 from the estimate costs at least 1.92 in −log L (a 95%
+likelihood-ratio interval inside ±0.1) in at least 80% of runs.
+
+| true γ | estimate = truth | `f` bias, γ fitted | `k` bias, γ fitted | `f` bias, γ held at 0.9 | `k` bias, γ held at 0.9 |
+|---|---|---|---|---|---|
+| 0.7 | 15 of 15 | +0.7 ± 1.1% | +1.4 ± 1.4% | −62 ± 1% | +17 ± 2% |
+| 0.8 | 15 of 15 | +0.4 ± 1.4% | −2.0 ± 1.6% | −46 ± 1% | +4 ± 2% |
+| 0.9 | 15 of 15 | +0.7 ± 1.0% | +0.7 ± 1.1% | +1 ± 1% | +1 ± 1% |
+| 0.95 | 15 of 15 | −0.4 ± 0.8% | −2.2 ± 1.3% | +57 ± 1% | −8 ± 4% |
+
+- **P1 and P2 hold in all 60 runs.** The profile is steep: a grid step from the truth
+  costs 8 to 230 in −log L in most runs; the smallest rise anywhere was 0.4 (γ 0.6 for a
+  person at 0.7, inside ±0.1).
+- **With γ fitted, `f` and `k` are unbiased**: +0.3 ± 0.5% and −0.5 ± 0.7% pooled, no
+  person off by more than 12%.
+- **What it does not show.** Every true γ was a grid point, so "the estimate is the
+  truth" means correct to the grid's resolution (0.05 to 0.1), not a measured precision.
+  Every person shared α, `BOUND`, `SIGMA` and the reward with the fit, the best case;
+  `experiments.gamma_robustness` changes each in turn. The simulated person is paid the
+  end-of-set reward with feedback hidden, which the app does not yet show. Only three
+  combinations of `f` and `k` were run.
+- **When other constants are wrong (`python -m experiments.gamma_robustness`, seed 0 of
+  the bound and reward levels so far).** Claim fixed before the run, **R1**: the estimate
+  is within one grid step of the truth in at least 80% of runs at every level. With the
+  person's `BOUND` at 1.0 or 2.0, or a person who values the fraction right instead of
+  `1 − p`, the estimate was the true γ in 17 of 18 runs and its neighbour in one: R1 holds
+  so far. `f` is not protected: a wrong bound scales `f` and `k` (+54 to +60% at 1.0, −27%
+  at 2.0), and the fraction-right person gets `f` 46 to 54% too low even with γ fitted.
+
 ### Which difficulty and whether to show feedback
 
 **Which difficulty and whether to show feedback (2026-10-25).** Question-type task, skips
@@ -885,6 +931,14 @@ Feedback shown − hidden, `f = k = 0.8`, 96 paired seeds:
   ahead beyond 2 SE at 90%, 75% (2.05 SE, the narrowest) and 30% (3.9 SE), and never
   behind. At hard targets a run's total depends heavily on runs of luck, so the paired
   difference varies several times more than at 90%.
+- **The five people of the first table, per person (added 2026-10-28, after the results
+  were known; `python -m experiments.paper_stats`).** Shown − hidden in P(start), each
+  person's mean over six targets and 16 paired seeds, with a t interval over the seeds:
+  +0.034 [+0.025, +0.042] (f 0.4, k 0.4), +0.020 [−0.015, +0.054] (0.6, 1.2), +0.016
+  [+0.002, +0.030] (0.8, 0.8), +0.028 [+0.009, +0.047] (1.0, 1.0), +0.021 [+0.005,
+  +0.036] (1.2, 0.4). Across the five: **+0.024 [+0.015, +0.033]**, t with 4 df, all five
+  above zero. A one-sample test on the 30 person × target means gives the same mean with
+  p = 6e-5, but treats the six cells of one person as independent, so its p is too small.
 - **Across people (2026-10-25).** The 16 people of the 4×4 grid, six targets, shown and
   hidden, 16 paired seeds each (`python -m experiments.feedback_grid`, which also prints
   the next two bullets). Claim fixed before the run: showing feedback never lowers
@@ -978,6 +1032,22 @@ planning. It does not measure `f` better: reward planning over 96 settings is ah
 every checkpoint. Random settings measure `k` worst by the end, and they also collect the
 fewest decisions (143 in 300 ticks): people under them were away 52% of the time, against
 28 to 39% under the other ways.
+
+**Intervals (added 2026-10-28, after the results were known; descriptive, beside the
+2·SE rule).** A bootstrap over the 32 people, each person's arms kept together, 10,000
+resamples (`python -m experiments.paper_stats`). Information minus each other way, 95%
+intervals:
+
+| | default | random | reward, 84 | reward, 96 |
+|---|---|---|---|---|
+| k RMSE, 100 ticks | −0.84 [−1.07, −0.61] | −0.70 [−0.84, −0.54] | −0.78 [−0.97, −0.58] | −0.33 [−0.50, −0.15] |
+| k RMSE, 300 ticks | −0.57 [−0.72, −0.42] | −0.65 [−0.86, −0.44] | −0.51 [−0.72, −0.29] | −0.35 [−0.62, −0.07] |
+| f RMSE, 300 ticks | −0.06 [−0.11, −0.02] | −0.09 [−0.18, −0.01] | −0.01 [−0.06, +0.02] | +0.02 [−0.03, +0.07] |
+| total reward | +81 [+63, +99] | +83 [+63, +101] | +0.5 [−22, +23] | +3.9 [−16, +25] |
+| P(start) | +0.045 [+0.004, +0.085] | +0.091 [+0.056, +0.128] | +0.001 [−0.037, +0.037] | +0.002 [−0.044, +0.041] |
+
+Against reward planning, P(start) is within about ±0.04 and total reward within about
+±23: measuring costs no engagement that these 32 people can detect at that resolution.
 
 **The RMSEs are dominated by people who give few decisions.** In 300 ticks, 4 to 14 of
 the 32 people per arm gave fewer than 100 decisions in the fit; their `k` estimates run to
@@ -1456,6 +1526,9 @@ several.
 | The person may not share the model's constants | `python -m experiments.misspecification` | `results/misspecification/` |
 | How often the error hits `DELTA_CLIP`, the start node's effort cost, and what the continuing bootstrap does to value | `python -m experiments.value_checks` | `results/value_checks/` |
 | The coupled recovery plot | `python -m temporal recovery --mode coupled --reps 3` | `assets/initiation_recovery_coupled.png` |
+| Fitting the discount factor; Figure 5(a)'s γ-fitted line | `python -m experiments.gamma_profile` (split by `--gammas`, `--reps`, `--tag`) | `results/gamma_profile/runs_*.csv` |
+| γ when α, `BOUND` or the reward differ from the fit's | `python -m experiments.gamma_robustness` | `results/gamma_robustness/runs_*.csv` |
+| Intervals for Table 1 and the feedback effect (no simulation) | `python -m experiments.paper_stats` | `results/paper_stats.txt` |
 
 The `temporal recovery` sweeps print their tables as they finish; they have no `--replot`,
 but their saved CSVs are what Figure 6 reads. To re-run everything, run every command in
