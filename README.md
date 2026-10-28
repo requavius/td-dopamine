@@ -901,12 +901,23 @@ mean ± SE over the 15 runs of a cell, or the 60 runs pooled.
   | `BOUND` 2.0 | 0.95 | 6 of 6 exact | −26 ± 1% | −26 ± 1% | +17 ± 1% |
   | values the fraction right, not `1 − p` | 0.8 | 4 exact, 2 one step off | −52 ± 4% | −22 ± 8% | −73 ± 2% |
   | values the fraction right, not `1 − p` | 0.95 | 6 of 6 exact | −54 ± 3% | −22 ± 8% | −25 ± 5% |
+  | α 0.01 | 0.8 | 5 exact, 1 one step off | −10 ± 7% | −26 ± 7% | −54 ± 1% |
+  | α 0.01 | 0.95 | 3 exact, 3 one step off | −36 ± 7% | −36 ± 10% | −20 ± 1% |
+  | α 0.025 | 0.8 | 6 of 6 exact | −5 ± 3% | −3 ± 1% | −49 ± 2% |
+  | α 0.025 | 0.95 | 6 of 6 exact | −24 ± 1% | −20 ± 6% | +21 ± 1% |
+  | α 0.1 | 0.8 | 6 of 6 exact | +3 ± 1% | +5 ± 2% | −45 ± 1% |
+  | α 0.1 | 0.95 | 6 of 6 exact | +16 ± 2% | +13 ± 4% | +85 ± 2% |
+  | α 0.2 | 0.8 | 6 of 6 exact | +4 ± 1% | +7 ± 1% | −44 ± 1% |
+  | α 0.2 | 0.95 | 4 exact, 2 one step off | +51 ± 16% | +21 ± 8% | +104 ± 2% |
 
-  **R1 holds at every level** (36 runs). γ survives a wrong bound and a wrong reward;
-  `f` and `k` do not. A wrong bound scales both by about the same factor, which fitting
-  the bound removes ("The bound can be fitted"). A person who values the fraction right
-  gets `f` about half its true value even with γ fitted, and no fitted parameter absorbs
-  that. The learning-rate levels are running.
+  **R1 holds at every level** (84 runs: the true γ in 76, one grid step off in 8, never
+  further). γ survives a wrong bound, a wrong reward and a wrong learning rate; `f` and `k`
+  do not. A wrong bound scales both by about the same factor, which fitting the bound
+  removes ("The bound can be fitted"). A person who values the fraction right gets `f`
+  about half its true value even with γ fitted, and no fitted parameter absorbs that. A
+  wrong learning rate costs little at γ 0.8 (`f` within 10%) and a lot at γ 0.95 (`f` −36%
+  at α 0.01 to +51% at α 0.2): a patient learner's value depends on many sets, so how fast
+  it was learned matters more. The last column has both γ and the other constant wrong.
 
 ### The bound can be fitted: f, k, γ, BOUND and T0 together
 
@@ -1472,8 +1483,10 @@ probed runs).
 - The reward is assumed. Right answers are worth `1 − p`; a person who values the
   fraction right instead gets `f` 46 to 54% too low even with γ fitted ("Fitting the
   discount factor", robustness). No fitted parameter absorbs this.
-- The learning rate α is assumed (0.05) in every fit. On the app's task a wrong α moved
-  `f / k` by at most 5% with γ held at 0.9; with γ fitted it is being measured.
+- The learning rate α is assumed (0.05) in every fit, and with γ fitted it is the
+  largest remaining assumed constant: a person whose α is 0.01 to 0.2 gets `f` within 10%
+  at γ 0.8 but −36% to +51% at γ 0.95 ("Fitting the discount factor", robustness). γ itself
+  is still recovered to within one grid step.
 - With feedback hidden, the model pays the set's reward at an end-of-set score, but the
   app shows no end-of-set score: a hidden set never tells the person how they did. Every
   simulated result assumes the score is seen. The app needs the screen before human data
@@ -1628,6 +1641,9 @@ probed runs).
 
 ### Deferred, but kept in view
 
+- Fit α the way γ is fitted: replay the reward history at candidate (γ, α) pairs and
+  profile both. Whether α is identifiable from 300 start decisions plus redos has to be
+  tested first, the way γ was.
 - Which reward a person values could be measured rather than assumed: fit each person
   under `1 − p` and under the fraction right and compare likelihoods, after a recovery
   test shows the comparison picks the right one.
