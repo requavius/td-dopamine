@@ -1,0 +1,46 @@
+== information controller minus each other, 32 paired people, 10,000 bootstrap resamples, 95% intervals ==
+
+k RMSE, 100 ticks: information 0.193
+  − default setting    -0.843  [-1.069, -0.605]
+  − random             -0.695  [-0.843, -0.535]
+  − reward             -0.782  [-0.970, -0.575]
+  − reward (redo)      -0.332  [-0.504, -0.151]
+
+k RMSE, 300 ticks: information 0.156
+  − default setting    -0.568  [-0.719, -0.419]
+  − random             -0.651  [-0.855, -0.440]
+  − reward             -0.507  [-0.723, -0.290]
+  − reward (redo)      -0.353  [-0.615, -0.070]
+
+f RMSE, 100 ticks: information 0.103
+  − default setting    -0.093  [-0.152, -0.036]
+  − random             -0.100  [-0.173, -0.022]
+  − reward             -0.045  [-0.088, +0.003]
+  − reward (redo)      +0.002  [-0.046, +0.050]
+
+f RMSE, 300 ticks: information 0.091
+  − default setting    -0.058  [-0.107, -0.016]
+  − random             -0.094  [-0.178, -0.011]
+  − reward             -0.012  [-0.055, +0.024]
+  − reward (redo)      +0.016  [-0.030, +0.065]
+
+total reward: information 136.746
+  − default setting   +81.397  [+63.079, +98.905]
+  − random            +82.535  [+63.160, +101.309]
+  − reward             +0.496  [-21.615, +22.520]
+  − reward (redo)      +3.932  [-16.475, +24.557]
+
+P(start): information 0.847
+  − default setting    +0.045  [+0.004, +0.085]
+  − random             +0.091  [+0.056, +0.128]
+  − reward             +0.001  [-0.037, +0.037]
+  − reward (redo)      +0.002  [-0.044, +0.041]
+
+== feedback shown − hidden, P(start), five people × six targets × 16 paired seeds ==
+  f 0.4, k 0.4: +0.0338  [+0.0253, +0.0423] over 16 seeds
+  f 0.6, k 1.2: +0.0198  [-0.0145, +0.0540] over 16 seeds
+  f 0.8, k 0.8: +0.0156  [+0.0017, +0.0296] over 16 seeds
+  f 1.0, k 1.0: +0.0280  [+0.0087, +0.0473] over 16 seeds
+  f 1.2, k 0.4: +0.0207  [+0.0054, +0.0360] over 16 seeds
+across the five people: +0.0236  [+0.0146, +0.0326] (t, 4 df), 5 of 5 above zero
+for reference, the paper's test on the 30 cells: +0.0236, t = 4.70, p = 5.9e-05 (cells of one person are not independent, so this p is too small)
