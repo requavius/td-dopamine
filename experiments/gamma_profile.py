@@ -92,6 +92,7 @@ class GridShadow(Simulation):
             reward, self.model_credited = slot_reward(
                 self.state, self.achievement_so_far, self.model_credited, self.feedback,
                 s == self.state.stage_amt - 1)
+        self.model_reward = reward  # what the shadows were paid at this slot
         for g, sh in self.shadow.items():
             own, self.state.theta = self.state.theta, sh["theta"]
             sh["slot"] = value_of_stage(self.state, UserParams(f=1.0, k=1.0, g=g), s, reward)
@@ -147,15 +148,18 @@ class GridShadow(Simulation):
 #   blocks   None: InfoController steers. B: no controller; BLOCK_ENV with feedback on for
 #            B start decisions, then off for B, and so on
 #   grid     the shadow learners' γ values (GRID); t0 the person's non-decision time
+#   cls      the simulation class, GridShadow or a subclass (recovery_alpha.EventLog)
+#   sim_out  a list; the simulation is appended to it, for callers that read more than
+#            the records
 def run_app(f, k, g_true, seed, n=N_APP, a=0.05, reward="achievement", person=None,
-            blocks=None, grid=GRID, t0=0.0):
+            blocks=None, grid=GRID, t0=0.0, cls=GridShadow, sim_out=None):
     random.seed(seed)
     np.random.seed(seed)
     ctl = None if blocks else InfoController(seed=seed)
     start = BLOCK_ENV if blocks else ctl.env
     own = person or contextlib.nullcontext
     ratings = Ratings()
-    sim = GridShadow(UserParams(f=f, k=k, g=g_true, a=a, t0=t0), grid, reentry_cost=0.6,
+    sim = cls(UserParams(f=f, k=k, g=g_true, a=a, t0=t0), grid, reentry_cost=0.6,
                      review_rate=start.review_rate, review_mode=start.review_mode,
                      target_p=start.target_p, feedback=start.feedback, ratings=ratings,
                      skips=True, return_skipped=start.return_skipped, reward=reward)
@@ -178,6 +182,8 @@ def run_app(f, k, g_true, seed, n=N_APP, a=0.05, reward="achievement", person=No
         elif ctl.due(st):
             ctl.plan(sim.app_view(ratings), UserParams(f=f, k=k))
             apply(sim, ctl.env)
+    if sim_out is not None:
+        sim_out.append(sim)
     starts, redos = st.initiation_passages, st.first_passage
     upto = starts[n - 1]["timestep"]
     return starts[:n] + [r for r in redos if r["timestep"] <= upto]
