@@ -57,18 +57,21 @@ def survival(t, mu, bound=BOUND, sigma=SIGMA):
 
 
 # -log L of decisions. go: 1 upper, 0 lower, -1 undecided; rt in seconds (ignored when
-# undecided); mu per decision. Arrays of one length; bound and t0 scalars.
+# undecided); mu per decision. Arrays of one length; t0 a scalar. bound and t_dur are
+# scalars or one per decision (a redo prompt under time pressure has its own of both).
 def neg_log_likelihood(go, rt, mu, bound=BOUND, t0=0.0, lapse=LAPSE_MIX, t_dur=T_DUR):
     go = np.asarray(go)
     mu = np.asarray(mu, float)
+    bound = np.broadcast_to(np.asarray(bound, float), mu.shape)
+    t_dur = np.broadcast_to(np.asarray(t_dur, float), mu.shape)
     decided = go >= 0
     out = 0.0
     if decided.any():
         t = np.asarray(rt, float)[decided] - t0
-        dens = passage_density(t, mu[decided], go[decided] == 1, bound)
-        out -= np.sum(np.log((1 - lapse) * dens + 0.5 * lapse / t_dur))
+        dens = passage_density(t, mu[decided], go[decided] == 1, bound[decided])
+        out -= np.sum(np.log((1 - lapse) * dens + 0.5 * lapse / t_dur[decided]))
     if (~decided).any():
-        s = survival(t_dur - t0, mu[~decided], bound)
+        s = survival(t_dur[~decided] - t0, mu[~decided], bound[~decided])
         out -= np.sum(np.log(np.maximum((1 - lapse) * s, 1e-300)))
     return float(out)
 

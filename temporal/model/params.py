@@ -24,6 +24,7 @@ class UserParams:
     a: float = 0.05  # learning rate
     patience: float = PATIENCE  # seconds per unit of model time; small gives up fast
     t0: float = 0.0  # non-decision time added to every RT
+    pressure: float = 1.0  # share of the bound kept on a redo prompt under time pressure
 
 
 @dataclass

@@ -15,8 +15,8 @@ Claims, fixed before the run (paired on seed):
       with feedback shown.
 Everything else is reported without a claim.
 
-README: the "Across people", "By difficulty, over all 16 people" and "f and k set the two
-ends of the engagement curve" bullets.
+README: "Across people", with its "By difficulty, over all 16 people" and "f and k set
+the two ends of the engagement curve" bullets.
 
     python -m experiments.feedback_grid            # run (about 40 min), then summarize
     python -m experiments.feedback_grid --replot   # summarize the saved results

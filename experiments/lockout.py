@@ -16,7 +16,7 @@ Claims, fixed before the run (paired on person, target and seed):
 Reported without a claim: lockouts per person and target, and the start rate in runs that
 did not lock out.
 
-README: the "Lockout" bullet.
+README: "Lockout", under "Which difficulty and whether to show feedback".
 
     python -m experiments.lockout            # run, then summarize
     python -m experiments.lockout --replot   # summarize the saved results

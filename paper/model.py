@@ -13,7 +13,7 @@ from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
 from temporal.model.accumulator import BOUND, SIGMA, T_DUR
 
-from .common import OUT, RESULTS
+from .common import out, results
 
 LEVELS = (0.2, 0.6, 1.0, 1.5)
 
@@ -69,7 +69,7 @@ def fig_recovery(res):
         ax.text(1.75, 0.08, f"RMSE {stats[p]:.3f}", ha="right", va="bottom", color=INK)
         _panel(ax, "ab"[p == "k"])
     fig.tight_layout()
-    fig.savefig(OUT / "fig4_recovery.png", bbox_inches="tight", facecolor="white")
+    fig.savefig(out("fig4_recovery.png"), bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return stats
 
@@ -96,7 +96,7 @@ def fig_timeouts(res):
         _panel(ax, "ab"[p == "k"])
     axes[0].legend(loc="upper left", frameon=False, handletextpad=0.2)
     fig.tight_layout()
-    fig.savefig(OUT / "figS2_timeouts.png", bbox_inches="tight", facecolor="white")
+    fig.savefig(out("figS2_timeouts.png"), bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return stats
 
@@ -190,14 +190,14 @@ def fig_model():
     _panel_loop(fig.add_subplot(gs[0, :]))
     _panel_paths(fig.add_subplot(gs[1, 0]))
     _panel_reward(fig.add_subplot(gs[1, 1]))
-    fig.savefig(OUT / "fig1_model.png", bbox_inches="tight", facecolor="white")
+    fig.savefig(out("fig1_model.png"), bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
 
 def _setup():
     plt.rcdefaults()
     plt.rcParams.update(RC)
-    OUT.mkdir(parents=True, exist_ok=True)
+    out().mkdir(parents=True, exist_ok=True)
 
 
 def fig1():
@@ -207,9 +207,9 @@ def fig1():
 
 def fig4():
     _setup()
-    print("Figure 4 RMSE:", fig_recovery(pd.read_csv(RESULTS / "recovery_sweep" / "runs.csv")))
+    print("Figure 4 RMSE:", fig_recovery(pd.read_csv(results("recovery_sweep") / "runs.csv")))
 
 
 def figS2():
     _setup()
-    print("Figure S2:", fig_timeouts(pd.read_csv(RESULTS / "recovery_sweep" / "runs.csv")))
+    print("Figure S2:", fig_timeouts(pd.read_csv(results("recovery_sweep") / "runs.csv")))

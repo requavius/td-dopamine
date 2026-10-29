@@ -19,6 +19,7 @@ from .inference import fit, passages_to_frame
 from .model.accumulator import DT, snap_value, solution
 from .model.params import PATIENCE, UserParams
 from .model.persistence import attempts_to_frame, fit_patience
+from .model.pressure import REDO_DEADLINE
 from .model.questions import Ratings, synthetic_type_diffs
 from .model.simulation import Simulation
 
@@ -30,6 +31,9 @@ class Environment:
     feedback: bool = True
     return_skipped: bool = False
     redo_prompts: bool = False  # ask whether to redo each seen miss, as the app can
+    # With feedback hidden, ask on the end-of-set screen instead of not at all.
+    end_redos: bool = False
+    pressure: bool = False  # a countdown on every redo prompt (model/pressure.py)
 
     @property
     def review_mode(self):
@@ -39,7 +43,9 @@ class Environment:
         return (f"aim {self.target_p:.0%} right, review {self.review_rate:.2f}, "
                 f"feedback {'on' if self.feedback else 'off'}, "
                 f"skipped {'come back' if self.return_skipped else 'dropped'}"
-                + (", redo prompts" if self.redo_prompts else ""))
+                + (", redo prompts" if self.redo_prompts else "")
+                + (" at the end of the set" if self.end_redos else "")
+                + (f" with a {REDO_DEADLINE:g} s countdown" if self.pressure else ""))
 
 
 TARGETS = (0.9, 0.75, 0.6, 0.45, 0.3, 0.2)
@@ -52,6 +58,9 @@ SCHEDULED = tuple(Environment(t, r, fb, rs)
 # Misses come back only when the person asks: the redo decision, where cost varies most.
 REDO = tuple(Environment(t, 0.0, fb, False, True) for t in TARGETS for fb in FEEDBACK_LEVELS)
 CANDIDATES = SCHEDULED + REDO
+# Feedback hidden, and redos offered on the end-of-set screen. Not among CANDIDATES: the
+# app has no end-of-set screen yet (experiments/feedback_blocks.py uses them).
+REDO_END = tuple(Environment(t, 0.0, False, False, True, True) for t in TARGETS)
 
 # Estimation guardrails: the estimate starts at a prior and earns weight with data.
 PRIOR = (0.8, 0.8)
@@ -129,7 +138,8 @@ def fork(state, params, env):
                                            persistence=[]))
     sim = Simulation(params, review_mode=env.review_mode, review_rate=env.review_rate,
                      target_p=env.target_p, feedback=env.feedback,
-                     skips=True, return_skipped=env.return_skipped)
+                     skips=True, return_skipped=env.return_skipped, end_redos=env.end_redos,
+                     redo_deadline=REDO_DEADLINE if env.pressure else None)
     sim.state = st
     return sim
 
@@ -138,7 +148,8 @@ def fork(state, params, env):
 def apply(sim, env):
     sim.target_p, sim.review_rate = env.target_p, env.review_rate
     sim.feedback, sim.return_skipped = env.feedback, env.return_skipped
-    sim.review_mode = env.review_mode
+    sim.review_mode, sim.end_redos = env.review_mode, env.end_redos
+    sim.redo_deadline = REDO_DEADLINE if env.pressure else None
 
 
 # Total reward earned over `horizon` ticks in `env`. Time away counts against it.
@@ -414,7 +425,8 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
     sim = Simulation(params, reentry_cost=reentry_cost, review_rate=start.review_rate,
                      review_mode=start.review_mode, target_p=start.target_p,
                      feedback=start.feedback, ratings=ratings, skips=skips,
-                     return_skipped=start.return_skipped)
+                     return_skipped=start.return_skipped, end_redos=start.end_redos,
+                     redo_deadline=REDO_DEADLINE if start.pressure else None)
     st = sim.state
     truth = type_diffs if type_diffs is not None else synthetic_type_diffs(spread)
     st.type_diffs = np.array(truth, dtype=float) # hidden from the controller

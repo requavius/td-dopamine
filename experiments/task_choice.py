@@ -28,14 +28,17 @@ import pandas as pd
 from temporal.controller import TARGETS, Environment, run
 from temporal.model.params import UserParams
 
-from .common import args, out_dir, run_pool, se
+from .common import args, design, out_dir, run_pool, se
 
-OUT = out_dir("task_choice")
-N = 300
-REVIEW = 0.25
-PEOPLE = ((0.6, 1.2), (1.0, 1.0), (0.8, 0.8), (0.4, 0.4), (1.2, 0.4))
-SEEDS_A = 16
-SEEDS_B = 96
+D = design("task_choice", ticks=300, review=0.25,
+           people=((0.6, 1.2), (1.0, 1.0), (0.8, 0.8), (0.4, 0.4), (1.2, 0.4)),
+           seeds_a=16, person_b=(0.8, 0.8), seeds_b=96)
+OUT = out_dir(D.out)
+N = D.ticks
+REVIEW = D.review
+PEOPLE = D.people
+SEEDS_A = D.seeds_a
+SEEDS_B = D.seeds_b
 
 
 # One run of one fixed setting, N ticks long. Shared with feedback_grid and lockout.
@@ -56,7 +59,7 @@ def one_run(task):
 def tasks():
     out = [(part, f, k, t, fb, 1000 + s) for part, fb in (("a", True), ("a_hidden", False))
            for f, k in PEOPLE for t in TARGETS for s in range(SEEDS_A)]
-    out += [("b", 0.8, 0.8, t, fb, 2000 + s) for t in TARGETS for fb in (True, False)
+    out += [("b", *D.person_b, t, fb, 2000 + s) for t in TARGETS for fb in (True, False)
             for s in range(SEEDS_B)]
     return out
 
@@ -104,7 +107,7 @@ def summarize(df):
               + f"   {best:.0%}, {'determined' if all(beats) else 'not determined'}")
 
     b = df[df.part == "b"]
-    print(f"\n== feedback shown - hidden, f = k = 0.8, {SEEDS_B} paired seeds (claim B) ==")
+    print(f"\n== feedback shown - hidden, f, k = {D.person_b}, {SEEDS_B} paired seeds (claim B) ==")
     diffs = {}
     for col, name in (("p_go", "P(start)"), ("away", "share away"), ("reward", "total reward")):
         cells = []
@@ -126,7 +129,7 @@ def summarize(df):
 
 
 if __name__ == "__main__":
-    a = args(__doc__)
+    a = args(__doc__, D)
     if a.replot:
         df = pd.read_csv(OUT / "runs.csv")
     else:

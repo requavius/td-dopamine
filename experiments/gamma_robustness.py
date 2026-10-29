@@ -32,13 +32,18 @@ import pandas as pd
 
 from temporal.model import accumulator as acc
 
-from .common import Quiet, out_dir, run_pool, se
-from .gamma_profile import PEOPLE, floats, per_run, profile, run_app, seed_of
+from . import gamma_profile
+from .common import Quiet, _design_args, design, out_dir, run_pool, save_conditions, se
+from .gamma_profile import floats, per_run, profile, run_app, seed_of
 from .misspecification import PersonConstants
 
-OUT = out_dir("gamma_robustness")
-TRUE_G = (0.8, 0.95)
-LEVELS = {"a": (0.01, 0.025, 0.1, 0.2), "bound": (1.0, 2.0), "reward": ("accuracy",)}
+D = design("gamma_robustness", people=gamma_profile.D.paper["people"], true_g=(0.8, 0.95),
+           reps=2, decisions=gamma_profile.D.paper["decisions"], a=(0.01, 0.025, 0.1, 0.2),
+           bound=(1.0, 2.0), reward=("accuracy",))
+OUT = out_dir(D.out)
+PEOPLE = list(D.people)
+TRUE_G = D.true_g
+LEVELS = {"a": D.a, "bound": D.bound, "reward": D.reward}
 RUN = ["factor", "level", "f_true", "k_true", "g_true", "rep"]
 
 
@@ -50,7 +55,7 @@ def _one(task):
           "reward": {"reward": level}}[factor]
     acc.clear_caches()
     with Quiet():
-        rows = profile(run_app(f, k, g_true, seed, **kw))
+        rows = profile(run_app(f, k, g_true, seed, n=D.decisions, **kw))
     return [dict(factor=factor, level=str(level), f_true=f, k_true=k, g_true=g_true, rep=rep,
                  seed=seed, **r) for r in rows]
 
@@ -77,10 +82,13 @@ if __name__ == "__main__":
     p.add_argument("--replot", action="store_true", help="merge and summarize the saved results")
     p.add_argument("--factors", default=",".join(LEVELS), help="which of a, bound, reward")
     p.add_argument("--gammas", type=floats, default=TRUE_G, help="true γ values to run")
-    p.add_argument("--reps", type=lambda s: tuple(int(x) for x in s.split(",")), default=(0, 1))
+    p.add_argument("--reps", type=lambda s: tuple(int(x) for x in s.split(",")),
+                   default=tuple(range(D.reps)), help="which reps to run, for example 0,1")
     p.add_argument("--tag", default="local", help="names this machine's file, runs_<tag>.csv")
+    _design_args(p)
     a = p.parse_args()
     if not a.replot:
+        save_conditions(D)
         tasks = [(fa, lv, f, k, g, rep) for fa in a.factors.split(",") for lv in LEVELS[fa]
                  for g in a.gammas for f, k in PEOPLE for rep in a.reps]
         run_pool(_one, tasks, OUT / f"runs_{a.tag}.csv", fresh=True,

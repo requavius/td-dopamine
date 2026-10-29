@@ -37,12 +37,14 @@ from temporal.controller import SCHEDULED, Controller, Environment, InfoControll
 from temporal.inference import fit, passages_to_frame
 from temporal.model.params import UserParams
 
-from .common import LEVELS, Quiet, args, out_dir, run_pool, se
+from .common import LEVELS, Quiet, args, design, out_dir, run_pool, se
 
-OUT = out_dir("controllers")
-REPS = 2
-N = 300
-CHECKPOINTS = (100, 200, 300)
+# The run lasts until the last checkpoint.
+D = design("controllers", levels=LEVELS, reps=2, checkpoints=(100, 200, 300))
+OUT = out_dir(D.out)
+REPS = D.reps
+CHECKPOINTS = D.checkpoints
+N = CHECKPOINTS[-1]
 ARMS = ("fixed", "random", "random_redo", "reward_scheduled", "reward", "information")
 KEY = ["f_true", "k_true", "seed"]
 
@@ -100,7 +102,7 @@ def _one(task):
     return out
 
 
-def rmse(d, p, n=300):
+def rmse(d, p, n=N):
     return float(np.sqrt(((d[f"{p}_{n}"] - d[f"{p}_true"]) ** 2).mean()))
 
 
@@ -112,7 +114,7 @@ def paired(res, a, b, col):
 
 
 def summarize(res):
-    res = res.assign(ek=(res.k_300 - res.k_true) ** 2, ef=(res.f_300 - res.f_true) ** 2)
+    res = res.assign(ek=(res[f"k_{N}"] - res.k_true) ** 2, ef=(res[f"f_{N}"] - res.f_true) ** 2)
     by = {arm: res[res.arm == arm] for arm in ARMS}
 
     print("== redo settings chosen, share of updates, and redo prompts per person ==")
@@ -120,7 +122,7 @@ def summarize(res):
         print(f"{arm:>17}: {by[arm].redo_share.mean():.0%} of updates, "
               f"{by[arm].redo_prompts.mean():.0f} redo prompts")
 
-    print(f"\n== after {N} ticks (32 people) ==")
+    print(f"\n== after {N} ticks ({len(by['fixed'])} people) ==")
     print(f"{'arm':>17}  f RMSE  k RMSE  reward  P(start)  decisions  away")
     for arm in ("fixed", "reward_scheduled", "reward", "information"):
         d = by[arm]
@@ -128,17 +130,19 @@ def summarize(res):
               f"{d.p_go.mean():8.2f}  {d.decisions.mean():9.0f}  {d.away.mean():4.0%}")
 
     print("\n== over time (ticks) ==")
-    print(f"{'arm':>17}  k RMSE at 100 / 200 / 300   f RMSE at 100 / 200 / 300   sd of cost at 300"
-          "   decisions in the fit at 100 / 200 / 300")
+    at = " / ".join(str(n) for n in CHECKPOINTS)
+    print(f"{'arm':>17}  k RMSE at {at}   f RMSE at {at}   sd of cost at {N}"
+          f"   decisions in the fit at {at}")
     for arm in ("fixed", "random", "reward_scheduled", "reward", "information"):
         d = by[arm]
         ks = " / ".join(f"{rmse(d, 'k', n):.3f}" for n in CHECKPOINTS)
         fs = " / ".join(f"{rmse(d, 'f', n):.3f}" for n in CHECKPOINTS)
         rows = " / ".join(f"{d[f'rows_{n}'].mean():.0f}" for n in CHECKPOINTS)
-        print(f"{arm:>17}  {ks:>25}   {fs:>25}   {d.csd_300.mean():.3f}   {rows}")
+        print(f"{arm:>17}  {ks:>25}   {fs:>25}   {d[f'csd_{N}'].mean():.3f}   {rows}")
 
     print("\n== block by block ==")
-    print(f"{'arm':>17}  reward, ticks 1-100 / 101-200 / 201-300   P(start), the same blocks")
+    blocks = " / ".join(f"{lo + 1}-{n}" for lo, n in zip((0, *CHECKPOINTS), CHECKPOINTS))
+    print(f"{'arm':>17}  reward, ticks {blocks}   P(start), the same blocks")
     for arm in ("fixed", "random", "reward_scheduled", "reward", "information"):
         d = by[arm]
         rw = " / ".join(f"{d[f'reward_{n}'].mean():.1f}" for n in CHECKPOINTS)
@@ -169,16 +173,16 @@ def summarize(res):
         print(f"{a} - {b}: reward {'{:+.1f} ± {:.1f}'.format(*paired(res, a, b, 'reward'))}; "
               f"k squared error {'{:+.4f} ± {:.4f}'.format(*paired(res, a, b, 'ek'))}")
     for arm in ("reward_scheduled", "reward", "information"):
-        low = by[arm][by[arm].k_300 < 0.05]
-        print(f"{arm}: k below 0.05 for {len(low)} of 32 (true k {sorted(set(low.k_true))})")
+        low = by[arm][by[arm][f"k_{N}"] < 0.05]
+        print(f"{arm}: k below 0.05 for {len(low)} of {len(by[arm])} (true k {sorted(set(low.k_true))})")
 
 
 if __name__ == "__main__":
-    a = args(__doc__)
+    a = args(__doc__, D)
     if a.replot:
         res = pd.read_csv(OUT / "runs.csv")
     else:
-        tasks = [(arm, f, k, s) for arm in ARMS for f in LEVELS for k in LEVELS for s in range(REPS)]
+        tasks = [(arm, f, k, s) for arm in ARMS for f in D.levels for k in D.levels for s in range(REPS)]
         tasks.sort(key=lambda t: t[0] in ("fixed", "random", "random_redo"))  # slow arms first
         res = run_pool(_one, tasks, OUT / "runs.csv",
                        label=lambda r: f"{r['arm']} f {r['f_true']} k {r['k_true']} seed {r['seed']}")

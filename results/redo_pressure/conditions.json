@@ -1,0 +1,50 @@
+{
+  "experiment": "redo_pressure",
+  "conditions": {
+    "people": 64,
+    "seed": 20261032,
+    "decisions": 300,
+    "block": 25,
+    "deadline": 3.0,
+    "ranges": {
+      "f": [
+        0.2,
+        1.5
+      ],
+      "k": [
+        0.2,
+        1.5
+      ],
+      "g": [
+        0.6,
+        0.97
+      ],
+      "bound": [
+        1.0,
+        2.0
+      ],
+      "t0": [
+        0.0,
+        0.4
+      ],
+      "lam": [
+        0.4,
+        1.0
+      ]
+    }
+  },
+  "changed": {},
+  "model": {
+    "g": 0.9,
+    "a": 0.05,
+    "ACHIEVEMENT_SCALE": 4.0,
+    "bootstrap": "continuing",
+    "SIGMA": 0.7,
+    "BOUND": 1.5,
+    "T_DUR": 7.0
+  },
+  "date": "2026-10-28",
+  "commit": null,
+  "command": "python -m experiments.redo_pressure (people 0-31 --tag mac, 32-47 --tag server, 48-63 --tag mac2)",
+  "note": "run on 2026-10-28 from uncommitted code in three batches; the first two from the file before its conversion to design(), with the same values; this file was written by the third"
+}

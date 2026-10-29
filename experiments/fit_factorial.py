@@ -36,12 +36,13 @@ from temporal.inference import fit, passages_to_frame
 from temporal.model.params import UserParams
 from temporal.model.persistence import attempts_to_frame
 
-from .common import LEVELS, Quiet, args, out_dir, run_pool, se
+from .common import LEVELS, Quiet, args, design, out_dir, run_pool, se
 
-OUT = out_dir("fit_factorial")
-REPS = 2
-N = 300
-T0_TRUE = 0.3
+D = design("fit_factorial", levels=LEVELS, reps=2, decisions=300, t0_true=0.3)
+OUT = out_dir(D.out)
+REPS = D.reps
+N = D.decisions
+T0_TRUE = D.t0_true
 FACTORS = {"timeouts": ("kept", "dropped"), "t0": ("fitted", "pinned"), "times": ("no", "yes")}
 PIPELINE = ("kept", "fitted", "no")
 
@@ -78,7 +79,7 @@ def summarize(df):
     key = ["f_true", "k_true", "seed"]
     cells = {c: g.set_index(key).sort_index() for c, g in df.groupby(["timeouts", "t0", "times"])}
     base = cells[PIPELINE]
-    print(f"== {len(base)} people, 300 start decisions, true T0 {T0_TRUE} s ==")
+    print(f"== {len(base)} people, {N} start decisions, true T0 {T0_TRUE} s ==")
     print(f"{'timeouts':>9} {'T0':>7} {'times':>6} | {'f RMSE':>7} {'k RMSE':>7} | {'f bias %':>9} {'k bias %':>9}")
     order = sorted(cells, key=lambda c: sum(a != b for a, b in zip(c, PIPELINE)))
     for c in order:
@@ -118,11 +119,11 @@ def summarize(df):
 
 
 if __name__ == "__main__":
-    a = args(__doc__)
+    a = args(__doc__, D)
     if a.replot:
         df = pd.read_csv(OUT / "runs.csv")
     else:
-        tasks = [(f, k, s) for f in LEVELS for k in LEVELS for s in range(REPS)]
+        tasks = [(f, k, s) for f in D.levels for k in D.levels for s in range(REPS)]
         df = run_pool(_one, tasks, OUT / "runs.csv",
                       label=lambda rows: f"f {rows[0]['f_true']} k {rows[0]['k_true']} seed {rows[0]['seed']}")
     summarize(df)

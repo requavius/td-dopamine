@@ -6,8 +6,10 @@ fit choices). Current model: gamma 0.9, ACHIEVEMENT_SCALE 4, continuing bootstra
     (python -m temporal recovery --mode t0 --reps 3 --out results/pipelines)
 (c) f and k from decisions, answer and skip times, both: results/pipelines/persistence.csv
     (python -m temporal recovery --mode persistence --reps 3 --out results/pipelines)
-(d) expected precision of f and k from 300 start decisions: results/precision
-    (experiments.precision)
+(d) expected SD of k from the Fisher information at the truth, 300 start decisions with
+    and without their redo decisions, with f and k free (γ, BOUND, T0 at the truth) and
+    with all five free: results/precision_full (experiments.precision_full, the 100
+    people of experiments.recovery_lhc under InfoController); bars are medians, dots people
 S3: results/fit_factorial (experiments.fit_factorial)
 
     python -m paper fig6 figS3
@@ -16,9 +18,8 @@ import numpy as np
 import pandas as pd
 
 from . import style as fs
-from .common import OUT, RESULTS
+from .common import out, results
 
-PIPELINES = RESULTS / "pipelines"
 # The 8 fits, pipeline first, then one change, two, all three.
 VERSIONS = [(("kept", "fitted", "no"), "pipeline"), (("dropped", "fitted", "no"), "drop\ntimeouts"),
             (("kept", "pinned", "no"), "pin T0"), (("kept", "fitted", "yes"), "add\ntimes"),
@@ -49,7 +50,7 @@ def fig6():
     (a, b), (c, d) = axes
 
     # (a) timed-out trials
-    r = pd.read_csv(RESULTS / "recovery_sweep" / "runs.csv")
+    r = pd.read_csv(results("recovery_sweep") / "runs.csv")
     groups = {lab: {p: 100 * (r[f"{p}_{s}"] - r[f"{p}_true"]) / r[f"{p}_true"] for p in ("f", "k")}
               for lab, s in (("kept", "kept"), ("dropped", "drop"))}
     _bias_panel(a, groups, ["kept", "dropped"], [fs.DARK, fs.LIGHT], "Bias (%)")
@@ -59,7 +60,7 @@ def fig6():
     fs.panel_label(a, "a")
 
     # (b) non-decision time
-    t = pd.read_csv(PIPELINES / "t0.csv")
+    t = pd.read_csv(results("pipelines") / "t0.csv")
     g = t.groupby("t0_true")
     for col, mark, lab in (("pinned", "o", "pinned at 0"), ("free", "s", "fitted")):
         shade = fs.LIGHT if col == "pinned" else fs.DARK
@@ -76,7 +77,7 @@ def fig6():
     fs.panel_label(b, "b")
 
     # (c) data source
-    pr = pd.read_csv(PIPELINES / "persistence.csv")
+    pr = pd.read_csv(results("pipelines") / "persistence.csv")
     sources = (("decisions", "decisions"), ("persistence", "times"), ("joint", "both"))
     xs = np.arange(len(sources))
     width = 0.36
@@ -99,37 +100,40 @@ def fig6():
     _precision(d)
     fs.panel_label(d, "d")
 
-    fs.save(fig, OUT / "fig6_shortcuts")
+    fs.save(fig, out("fig6_shortcuts"))
 
 
-# Expected precision of f and k from 300 start decisions, by the kind of decisions the
-# data holds (experiments.precision).
-DESIGNS = (("starts", "starts"), ("starts_redo", "starts\n+ redos"))
+# Expected SD of k by the decisions in the data and how many parameters are free
+# (experiments.precision_full).
+DESIGNS = (("starts", "starts"), ("both", "starts\n+ redos"))
 
 
 def _precision(d):
-    df = pd.read_csv(RESULTS / "precision" / "runs.csv")
+    df = pd.read_csv(results("precision_full") / "runs.csv")
     xs = np.arange(len(DESIGNS))
     width = 0.38
-    for i, (p, shade) in enumerate((("f", fs.DARK), ("k", fs.LIGHT))):
+    for i, (free, shade, label) in enumerate((("2", fs.DARK, "$f$, $k$ free"),
+                                              ("5", fs.LIGHT, "all five free"))):
         x = xs + (i - 0.5) * width
         for xi, (name, _) in zip(x, DESIGNS):
-            vals = df[df.design == name][f"sd_{p}"]
+            vals = df[f"sd_k_{name}_{free}"].dropna()
             d.bar(xi, np.median(vals), width * 0.9, color=shade, edgecolor="black", lw=1.0,
-                  label=f"${p}$" if xi == x[0] else None, zorder=2)
+                  label=label if xi == x[0] else None, zorder=2)
             jit = np.random.default_rng(int(abs(xi) * 100) + i).uniform(-width * 0.25, width * 0.25, len(vals))
-            d.scatter(xi + jit, vals, s=8, color="black", alpha=0.45, lw=0, zorder=3)
+            d.scatter(xi + jit, vals, s=6, color="black", alpha=0.45, lw=0, zorder=3)
     d.set_xticks(xs)
     d.set_xticklabels([lab for _, lab in DESIGNS], fontsize=10)
     d.set_xlabel("Decisions in the data")
-    d.set_ylabel("Expected SD, 300 starts")
-    d.set_ylim(bottom=0)
-    d.legend(loc="upper right", handlelength=1.0)
+    d.set_ylabel("Expected SD of $k$")
+    d.set_yscale("log")
+    d.set_yticks([0.03, 0.1, 0.3, 1.0], ["0.03", "0.1", "0.3", "1"])
+    d.minorticks_off()
+    d.legend(loc="upper right", handlelength=1.0, fontsize=9)
 
 
 def figS3():
     fs.apply()
-    df = pd.read_csv(RESULTS / "fit_factorial" / "runs.csv")
+    df = pd.read_csv(results("fit_factorial") / "runs.csv")
     fig = fs.plt.figure(figsize=(7.4, 6.8))
     gs = fig.add_gridspec(2, 1, hspace=0.6)
     a = fig.add_subplot(gs[0])
@@ -158,4 +162,4 @@ def figS3():
     b.set_ylabel("Mean bias (%)")
     fs.panel_label(a, "a", x=-0.08)
     fs.panel_label(b, "b", x=-0.08)
-    fs.save(fig, OUT / "figS3_factorial")
+    fs.save(fig, out("figS3_factorial"))

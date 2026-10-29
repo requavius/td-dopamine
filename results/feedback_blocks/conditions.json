@@ -1,0 +1,48 @@
+{
+  "experiment": "feedback_blocks",
+  "conditions": {
+    "people": 128,
+    "seed": 20261031,
+    "checkpoints": [
+      100,
+      200,
+      300
+    ],
+    "ranges": {
+      "f": [
+        0.2,
+        1.5
+      ],
+      "k": [
+        0.2,
+        1.5
+      ],
+      "g": [
+        0.6,
+        0.97
+      ],
+      "bound": [
+        1.0,
+        2.0
+      ],
+      "t0": [
+        0.0,
+        0.4
+      ]
+    }
+  },
+  "changed": {},
+  "model": {
+    "g": 0.9,
+    "a": 0.05,
+    "ACHIEVEMENT_SCALE": 4.0,
+    "bootstrap": "continuing",
+    "SIGMA": 0.7,
+    "BOUND": 1.5,
+    "T_DUR": 7.0
+  },
+  "date": "2026-10-28",
+  "commit": null,
+  "command": "python -m experiments.feedback_blocks --tag server",
+  "note": "run on 2026-10-28 on the server from uncommitted code (experiments/feedback_blocks.py before its conversion to design(), with the same values); recorded afterwards from the experiment's defaults"
+}

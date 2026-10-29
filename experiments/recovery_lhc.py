@@ -55,17 +55,19 @@ from temporal import fastlik
 from temporal.inference import T0_BOUNDS
 from temporal.model import accumulator as acc
 
-from .common import Quiet, out_dir, run_pool, se
+from .common import Quiet, _design_args, design, out_dir, run_pool, save_conditions, se
 from .gamma_profile import run_app
 from .misspecification import PersonConstants
 
-OUT = out_dir("recovery_lhc")
-HIST = out_dir("recovery_lhc/histories")
-N_PEOPLE = 100
-RANGES = {"f": (0.2, 1.5), "k": (0.2, 1.5), "g": (0.6, 0.97), "bound": (1.0, 2.0),
-          "t0": (0.0, 0.4)}
+D = design("recovery_lhc", people=100, decisions=300, seed=20261028,
+           ranges={"f": (0.2, 1.5), "k": (0.2, 1.5), "g": (0.6, 0.97), "bound": (1.0, 2.0),
+                   "t0": (0.0, 0.4)})
+OUT = out_dir(D.out)
+HIST = out_dir(f"{D.out}/histories")
+N_PEOPLE = D.people
+RANGES = D.ranges
 G_FINE = tuple(round(0.50 + 0.01 * i, 2) for i in range(50))  # 0.50 to 0.99
-SEED = 20261028
+SEED = D.seed
 
 
 # The hypercube, the same on every machine.
@@ -84,7 +86,7 @@ def _simulate(i):
     truth = people()[i]
     acc.clear_caches()
     with Quiet():
-        data = run_app(truth["f"], truth["k"], truth["g"], seed=SEED + i,
+        data = run_app(truth["f"], truth["k"], truth["g"], seed=SEED + i, n=D.decisions,
                        person=PersonConstants(acc.SIGMA, truth["bound"]), grid=G_FINE,
                        t0=truth["t0"])
     node = np.array([p.get("node") == "stage" for p in data], dtype=np.int8)
@@ -112,8 +114,9 @@ APP = {"g": 0.9, "bound": acc.BOUND}  # what the current pipeline pins
 class Person:
     """One saved history: its decisions, and value as a smooth function of γ."""
 
-    def __init__(self, i):
-        h = np.load(history_path(i))
+    # `h`: the history's arrays, as saved by _simulate; read from its file when None.
+    def __init__(self, i, h=None):
+        h = np.load(history_path(i)) if h is None else h
         self.i = i
         self.go, self.rt, self.cost, self.node = h["go"], h["rt"], h["cost"], h["node"]
         self.value = CubicSpline(h["g_grid"], (h["base"] + h["delta"]).T, axis=0)
@@ -238,8 +241,10 @@ if __name__ == "__main__":
     p.add_argument("--replot", action="store_true", help="summarize the saved fits")
     p.add_argument("--people", type=span, default=list(range(N_PEOPLE)), help="for example 0-49")
     p.add_argument("--tag", default="local", help="names this machine's file")
+    _design_args(p)
     a = p.parse_args()
     if a.stage == "simulate":
+        save_conditions(D)
         todo = [i for i in a.people if not history_path(i).exists()]
         run_pool(_simulate, todo, OUT / f"simulated_{a.tag}.csv", fresh=True,
                  label=lambda r: f"person {r['person']}: {r['decisions']} decisions")

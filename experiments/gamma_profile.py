@@ -47,14 +47,17 @@ from temporal.model.questions import Ratings, synthetic_type_diffs
 from temporal.model.simulation import Simulation
 from temporal.model.value import V, slot_reward, value_of_stage
 
-from .common import Quiet, out_dir, run_pool
+from .common import Quiet, _design_args, design, out_dir, run_pool, save_conditions
 
-OUT = out_dir("gamma_profile")
-GRID = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 0.99)
+D = design("gamma_profile", people=((0.8, 0.8), (1.2, 0.4), (0.6, 1.2)),
+           true_g=(0.7, 0.8, 0.9, 0.95), reps=5, decisions=300,
+           grid=(0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 0.99))
+OUT = out_dir(D.out)
+GRID = D.grid
 APP_G = 0.9  # what the app computes value with
-PEOPLE = [(0.8, 0.8), (1.2, 0.4), (0.6, 1.2)]
-TRUE_G = (0.7, 0.8, 0.9, 0.95)
-N_APP = 300
+PEOPLE = list(D.people)
+TRUE_G = D.true_g
+N_APP = D.decisions
 CACHE_CAP = 15000
 LR_95 = 1.92  # half the chi-square(1) 95% point
 # The fixed setting of the feedback-block follow-up: misses come back only through redo
@@ -122,6 +125,17 @@ class GridShadow(Simulation):
         parts = {g: ((1.0 / n) * g ** (n - 1 - s), carried_delta(sh["slot"]))
                  for g, sh in self.shadow.items()}
         out = super()._redoes(s, item)
+        rec = self.state.first_passage[-1]
+        rec["parts_by_g"] = parts
+        rec["v_by_g"] = {g: acc.snap_value(a + d) for g, (a, d) in parts.items()}
+        return out
+
+    # An end-of-set redo: the undiscounted slot share, and each shadow's error for the set.
+    def _redoes_at_end(self, item, set_delta):
+        n = self.state.stage_amt
+        parts = {g: (1.0 / n, carried_delta(float(sum(sh["deltas"]))))
+                 for g, sh in self.shadow.items()}
+        out = super()._redoes_at_end(item, set_delta)
         rec = self.state.first_passage[-1]
         rec["parts_by_g"] = parts
         rec["v_by_g"] = {g: acc.snap_value(a + d) for g, (a, d) in parts.items()}
@@ -273,10 +287,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--replot", action="store_true", help="merge and summarize the saved results")
     p.add_argument("--gammas", type=floats, default=TRUE_G, help="true γ values to run")
-    p.add_argument("--reps", type=lambda s: tuple(int(x) for x in s.split(",")), default=(0, 1))
+    p.add_argument("--reps", type=lambda s: tuple(int(x) for x in s.split(",")),
+                   default=tuple(range(D.reps)), help="which reps to run, for example 0,1")
     p.add_argument("--tag", default="local", help="names this machine's file, runs_<tag>.csv")
+    _design_args(p)
     a = p.parse_args()
     if not a.replot:
+        save_conditions(D)
         tasks = [(f, k, g, rep) for g in a.gammas for f, k in PEOPLE for rep in a.reps]
         run_pool(_one, tasks, OUT / f"runs_{a.tag}.csv", fresh=True,
                  label=lambda rows: f"f {rows[0]['f_true']} k {rows[0]['k_true']} γ {rows[0]['g_true']}")

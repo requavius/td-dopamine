@@ -49,20 +49,19 @@ from temporal.model.questions import Ratings, synthetic_type_diffs
 from temporal.model.simulation import Simulation
 from temporal.model.value import V, value_of_stage
 
-from .common import Quiet, args, out_dir, run_pool, se
+from .common import Quiet, args, design, out_dir, run_pool, se
 
-OUT = out_dir("misspecification")
+D = design("misspecification", people=((0.8, 0.8), (1.2, 0.4), (0.6, 1.2)), reps=5,
+           decisions_app=300, decisions_single=1200,
+           g=(0.5, 0.7, 0.8, 0.9, 0.95, 0.99), a=(0.01, 0.025, 0.05, 0.1, 0.2),
+           sigma=(0.5, 0.6, 0.7, 0.85, 1.0), bound=(1.0, 1.25, 1.5, 1.75, 2.0))
+OUT = out_dir(D.out)
 DEFAULTS = {"g": 0.9, "a": 0.05, "sigma": acc.SIGMA, "bound": acc.BOUND}
-LEVELS = {
-    "g": (0.5, 0.7, 0.8, 0.9, 0.95, 0.99),
-    "a": (0.01, 0.025, 0.05, 0.1, 0.2),
-    "sigma": (0.5, 0.6, 0.7, 0.85, 1.0),
-    "bound": (1.0, 1.25, 1.5, 1.75, 2.0),
-}
+LEVELS = {"g": D.g, "a": D.a, "sigma": D.sigma, "bound": D.bound}
 NAMES = {"g": "γ", "a": "α", "sigma": "SIGMA", "bound": "BOUND"}
-PEOPLE = [(0.8, 0.8), (1.2, 0.4), (0.6, 1.2)]
-REPS = 5
-N_APP, N_SINGLE = 300, 1200
+PEOPLE = list(D.people)
+REPS = D.reps
+N_APP, N_SINGLE = D.decisions_app, D.decisions_single
 # Solved conditions kept per process. The InfoController's posterior draws keep adding new
 # (f, k), and uncapped the caches reached ~7 GB a worker. A solution is deterministic, so
 # clearing them changes no draw, only time.
@@ -289,7 +288,7 @@ def summarize(df):
 
 
 if __name__ == "__main__":
-    a = args(__doc__)
+    a = args(__doc__, D)
     if a.replot:
         df = pd.read_csv(OUT / "runs.csv")
     else:

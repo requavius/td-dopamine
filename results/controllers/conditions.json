@@ -1,0 +1,31 @@
+{
+  "experiment": "controllers",
+  "conditions": {
+    "levels": [
+      0.2,
+      0.6,
+      1.0,
+      1.5
+    ],
+    "reps": 2,
+    "checkpoints": [
+      100,
+      200,
+      300
+    ]
+  },
+  "changed": {},
+  "model": {
+    "g": 0.9,
+    "a": 0.05,
+    "ACHIEVEMENT_SCALE": 4.0,
+    "bootstrap": "continuing",
+    "SIGMA": 0.7,
+    "BOUND": 1.5,
+    "T_DUR": 7.0
+  },
+  "date": null,
+  "commit": null,
+  "command": "python -m experiments.controllers",
+  "note": "recorded on 2026-10-28 from the experiment's defaults, which the saved results were checked against; the run itself is older"
+}

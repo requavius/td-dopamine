@@ -46,6 +46,19 @@ earlier result was re-measured: every result fitted with γ at 0.9 stands, under
 condition. What these changes retired is listed below, under "Claims withdrawn under
 V4".
 
+Two optional features were added under V4 on 2026-10-28, both off by default, so every
+seeded output is unchanged (the regression tests pass unchanged).
+- **Redos at the end of the set** (`Simulation(end_redos=True)`, `Environment.end_redos`,
+  `controller.REDO_END`). With feedback hidden, the misses are offered for redo on the
+  end-of-set screen instead of not at all.
+- **A countdown on the redo prompt** (`temporal/model/pressure.py`,
+  `Environment.pressure`, `UserParams.pressure`). The person's bound on the prompt drops
+  to `pressure` × `BOUND`, and the prompt closes without a redo at 3 s.
+
+Neither is in the app's controller or the app yet. `fastlik.neg_log_likelihood` also
+takes a bound and a deadline per decision now, which changes no likelihood computed
+before.
+
 ---
 
 ## The recording flaw in V1 to V3 (fixed 2026-10-25)

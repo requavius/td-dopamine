@@ -16,19 +16,20 @@ import numpy as np
 import pandas as pd
 
 from temporal.inference import fit
-from temporal.recovery import collect_reseeded, seed_point
+from temporal.recovery import RESEED_WARMUPS, collect_reseeded, seed_point
 
-from .common import LEVELS, Quiet, args, out_dir, run_pool
+from .common import LEVELS, Quiet, args, design, out_dir, run_pool
 
-OUT = out_dir("recovery_sweep")
-REPS = 3
+D = design("recovery_sweep", levels=LEVELS, reps=3, decisions=1200, warmups=RESEED_WARMUPS)
+OUT = out_dir(D.out)
+REPS = D.reps
 
 
 def _one(task):
     f_true, k_true, rep = task
     seed = seed_point(f_true, k_true, rep)
     with Quiet():
-        df = collect_reseeded(f_true, k_true)
+        df = collect_reseeded(f_true, k_true, D.decisions, D.warmups)
         f_kept, k_kept = fit(df)
         dropped = df.copy()
         dropped.attrs["undecided"] = {}
@@ -75,11 +76,11 @@ def summarize(res):
 
 
 if __name__ == "__main__":
-    a = args(__doc__)
+    a = args(__doc__, D)
     if a.replot:
         res = pd.read_csv(OUT / "runs.csv")
     else:
-        tasks = [(f, k, r) for f in LEVELS for k in LEVELS for r in range(REPS)]
+        tasks = [(f, k, r) for f in D.levels for k in D.levels for r in range(REPS)]
         res = run_pool(_one, tasks, OUT / "runs.csv",
                        label=lambda r: f"f {r['f_true']} k {r['k_true']} rep {r['rep']}")
         res = res.sort_values(["f_true", "k_true", "rep"])
