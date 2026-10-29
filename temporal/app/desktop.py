@@ -1,7 +1,8 @@
 """The task in a desktop window: python -m temporal.app.desktop
 
 You answer questions, choose whether to redo a miss, and whether to start the next set.
-The record is kept in data/ between sessions.
+A set played with feedback hidden ends on its score. The record is kept in data/ between
+sessions.
 """
 import signal
 import threading
@@ -11,6 +12,7 @@ from tkinter import ttk
 
 import pandas as pd
 
+from ..controller import COUNTDOWNS
 from ..model.persistence import attempts_to_frame
 from .live import Paths, model_view
 from .session import MIN_FIT_ROWS, Session, fit_summary
@@ -19,13 +21,14 @@ BIG = ("Helvetica", 26)
 MED = ("Helvetica", 15)
 SMALL = ("Helvetica", 11)
 MONO = ("Menlo", 11)
+OUTCOME_COLOURS = {"correct": "#2e7d4f", "incorrect": "#b23a3a"}
 
 
 class DesktopApp(Session):
     def __init__(self, root, **kw):
         root.title("initiation model -- human version")
-        root.geometry("880x800")
-        root.minsize(880, 800)
+        root.geometry("880x860")
+        root.minsize(880, 860)
         self.live = None  # the live model window, when open
         super().__init__(root, **kw)
 
@@ -49,6 +52,8 @@ class DesktopApp(Session):
         ttk.Separator(right).pack(fill="x", pady=10)
         self._build_panel(right)
         self.refresh_stats()
+        # Ticking the controller on or off shows at once, not at the next screen.
+        self.v_controller.trace_add("write", lambda *_: self.refresh_stats())
 
     def _build_settings(self, right):
         ttk.Label(right, text="settings (live)", font=MED).pack(anchor="w")
@@ -64,13 +69,14 @@ class DesktopApp(Session):
         ttk.Scale(right, from_=0.0, to=1.0, variable=self.v_review, length=200).pack()
         ttk.Checkbutton(right, text="skipped questions come back too",
                         variable=self.v_return_skipped).pack(anchor="w")
-        ttk.Checkbutton(right, text="controller sets target, review, feedback, skipped, redo prompts",
+        ttk.Checkbutton(right, text="controller sets every setting but the stage count",
                         variable=self.v_controller).pack(anchor="w", pady=(6, 0))
         for text, var in [
             ("show stage count", self.v_show_count),
-            ("show score so far", self.v_show_score),
+            ("show score (hidden, a set pays the fraction right)", self.v_show_score),
             ("feedback (from next set)", self.v_feedback),
             ("offer repeat-or-continue", self.v_show_choice),
+            ("with feedback off, offer it after the score", self.v_end_redos),
         ]:
             ttk.Checkbutton(right, text=text, variable=var).pack(anchor="w", pady=1)
 
@@ -81,6 +87,13 @@ class DesktopApp(Session):
                         variable=self.v_forced).pack(side="left")
         ttk.Radiobutton(forced, text="repeats", value="repeat",
                         variable=self.v_forced).pack(side="left")
+
+        ttk.Label(right, text="countdown on redo prompts:", font=SMALL).pack(anchor="w", pady=(6, 0))
+        timed = ttk.Frame(right)
+        timed.pack(anchor="w")
+        for value in (0.0, *COUNTDOWNS):
+            ttk.Radiobutton(timed, text=f"{value:g} s" if value else "off", value=value,
+                            variable=self.v_countdown).pack(side="left")
 
     def _build_panel(self, right):
         ttk.Label(right, text="behind the scenes", font=MED).pack(anchor="w")
@@ -102,7 +115,7 @@ class DesktopApp(Session):
     def refresh_stats(self):
         self.stats.config(text=self.stats_text())
         self.now_label.config(text=self.now_text())
-        self.ctrl_label.config(text=f"controller: {self.controller_status}")
+        self.ctrl_label.config(text=f"controller: {self.controller_text()}")
 
     # ------------------------------------------------------------ screens
 
@@ -110,12 +123,12 @@ class DesktopApp(Session):
         if self._timer:
             self.root.after_cancel(self._timer)
             self._timer = None
-        for key in ("1", "2"):
+        for key in ("1", "2", "<Return>"):
             self.root.unbind(key)
         for w in self.left.winfo_children():
             w.destroy()
 
-    def ask_decision(self, prompt, yes_label, no_label, on_done):
+    def ask_decision(self, prompt, yes_label, no_label, on_done, deadline=None):
         self.clear()
         ttk.Label(self.left, text=prompt, font=BIG).grid(row=0, column=0, pady=(60, 20))
         row = ttk.Frame(self.left)
@@ -137,6 +150,20 @@ class DesktopApp(Session):
         ttk.Button(row, text=f"2  {no_label}", command=lambda: finish(0)).pack(side="left", padx=8)
         self.root.bind("1", lambda e: finish(1))
         self.root.bind("2", lambda e: finish(0))
+        if deadline is not None:
+            clock = ttk.Label(self.left, font=MED)
+            clock.grid(row=2, column=0)
+
+            def count():
+                self._timer = None
+                left = deadline - (time.perf_counter() - start)
+                if left <= 0:
+                    finish(None)  # undecided: the prompt closes
+                    return
+                clock.config(text=f"{left:.1f} s")
+                self._timer = self.root.after(100, count)
+
+            count()
         if self.live:
             self.live.follow(start)
 
@@ -158,10 +185,30 @@ class DesktopApp(Session):
         ttk.Label(self.left, text=text, font=BIG).grid(row=0, column=0, pady=90)
         self._timer = self.root.after(600, then)
 
+    def show_summary(self, rows, total, then):
+        self.clear()
+        ttk.Label(self.left, text="end of set", font=SMALL).grid(row=0, column=0, pady=(30, 10))
+        for i, (line, outcome) in enumerate(rows, start=1):
+            ttk.Label(self.left, text=line, font=MED,
+                      foreground=OUTCOME_COLOURS.get(outcome, "")).grid(row=i, column=0, pady=2)
+        ttk.Label(self.left, text=total, font=MED).grid(row=len(rows) + 1, column=0, pady=16)
+        done = []
+
+        def go(*_):
+            if not done:
+                done.append(True)
+                then()
+
+        ttk.Button(self.left, text="continue  (enter)", command=go).grid(row=len(rows) + 2,
+                                                                         column=0)
+        self.root.bind("<Return>", go)
+        self.refresh_stats()
+
     # ------------------------------------------------------------ panel buttons
 
     def run_fit(self):
         df = self.frame()
+        passages = self.decisions()
         if len(df) < MIN_FIT_ROWS:
             self.fit_label.config(text=f"only {len(df)} decided rows\nkeep going")
             return
@@ -172,7 +219,7 @@ class DesktopApp(Session):
 
         def work():
             try:
-                text = fit_summary(df, attempts)
+                text = fit_summary(passages, attempts)
             except Exception as exc:
                 text = f"fit failed: {exc}"
 
@@ -244,7 +291,7 @@ class LiveView:
         self._timer = None
         self.draw()
         now = time.perf_counter() - self.started
-        if self.app.decision_now.get("go") is None and now < self.view["t_dur"]:
+        if not self.app.decision_now["decided"] and now < self.view["t_dur"]:
             self._timer = self.app.root.after(33, self.tick)
 
     def draw(self):
@@ -255,9 +302,13 @@ class LiveView:
         if d is not self.decision:
             self.started = None
             self._new(d)
-        v = {**self.view, "go": d["go"], "rt": d["rt"]}
-        now = v["rt"] if v["go"] is not None else (
-            time.perf_counter() - self.started if self.started else 0.0)
+        v = {**self.view, "go": d["go"], "rt": d["rt"], "decided": d["decided"]}
+        if v["go"] is not None:
+            now = v["rt"]
+        elif v["decided"]:
+            now = v["t_dur"]  # the countdown ran out
+        else:
+            now = time.perf_counter() - self.started if self.started else 0.0
         now = min(now, v["t_dur"])
         self.paths.step_to(now)
         self._text(v)
@@ -266,14 +317,15 @@ class LiveView:
     def _text(self, v):
         pct = lambda x: f"{x:.0%}"  # noqa: E731
         label = "start the next set" if v["node"] == "start" else "redo the miss"
-        you = ("deciding..." if v["go"] is None else
+        you = ("deciding..." if not v["decided"] else
+               "the countdown ran out: no redo" if v["go"] is None else
                f"you: {v['yes'] if v['go'] else v['no']} at {v['rt']:.2f}s"
                + (" (past the deadline: undecided to the fit)" if v["rt"] > v["t_dur"] else ""))
         self.text.config(text="\n".join([
             f"{label}:  value {v['value']:.2f}  cost {v['cost']:.2f}",
             f"f {v['f']:.2f}  k {v['k']:.2f}  T0 {v['t0']:.2f}s  ->  drift {v['drift']:.2f}",
             f"predicted: {v['yes']} {pct(v['p_go'])}  {v['no']} {pct(v['p_no'])}  "
-            f"undecided by {v['t_dur']:.0f}s {pct(v['p_undecided'])}",
+            f"undecided by {v['t_dur']:g}s {pct(v['p_undecided'])}",
             you, v["note"]]))
 
     def _plot(self, v, now):

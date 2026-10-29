@@ -30,7 +30,8 @@ FIGURES = {
     "fig5": misspecification.fig5,    # what stays biased once γ is fitted
     "fig6": shortcuts.fig6,           # shortcuts in the fit
     "fig7": task.fig7,                # difficulty and feedback
-    "fig8": controllers.fig8,         # controllers over time
+    "fig8": controllers.fig8,         # controllers on the grid (γ 0.9, bound 1.5)
+    "fig8lhc": controllers.fig8lhc,   # controllers on the hypercube people, all five fitted
     "fig9": controllers.fig9,         # planning with γ, the bound and T0
     "figS2": model.figS2,             # timed-out trials kept vs dropped
     "figS3": shortcuts.figS3,         # the fit factorial

@@ -24,8 +24,8 @@ Claims, fixed before the first run (2026-10-28):
         least 1.92 in -log L (a 95% likelihood-ratio interval inside ±0.1), in at least
         80% of runs (the 80% was added on 2026-10-28, before any result was read)
 
-Best case for γ: the simulated person is credited the end-of-set reward with feedback
-hidden, which the app does not yet show (no end-of-set score screen).
+The simulated person is credited the end-of-set reward with feedback hidden, as the app's
+score has shown it since 2026-10-28.
 
     python -m experiments.gamma_profile --gammas 0.7,0.8 --reps 0,1 --tag server
     python -m experiments.gamma_profile --replot
@@ -45,7 +45,8 @@ from temporal.model.conditions import carried_delta
 from temporal.model.params import UserParams
 from temporal.model.questions import Ratings, synthetic_type_diffs
 from temporal.model.simulation import Simulation
-from temporal.model.value import V, slot_reward, value_of_stage
+from temporal.model.competence import success_prob
+from temporal.model.value import ACHIEVEMENT_SCALE, V, late_reward, slot_reward, value_of_stage
 
 from .common import Quiet, _design_args, design, out_dir, run_pool, save_conditions
 
@@ -129,6 +130,22 @@ class GridShadow(Simulation):
         rec["parts_by_g"] = parts
         rec["v_by_g"] = {g: acc.snap_value(a + d) for g, (a, d) in parts.items()}
         return out
+
+    # An end-of-set redo whose outcome is shown (`end_feedback`) lands its reward on the
+    # set's last step, and the error adds to the set's; each shadow takes the same, at its
+    # own γ and the app's α, paid the achievement reward as the app would compute it.
+    def _extra_question(self, item, set_delta):
+        p_item = success_prob(self.state, item)
+        landed = super()._extra_question(item, set_delta)
+        if landed:
+            n = self.state.stage_amt
+            reward = landed if self.reward == "achievement" else ACHIEVEMENT_SCALE * (1.0 - p_item) / n
+            for g, sh in self.shadow.items():
+                own, self.state.theta = self.state.theta, sh["theta"]
+                sh["deltas"].append(late_reward(self.state, UserParams(f=1.0, k=1.0, g=g),
+                                                n - 1, reward))
+                sh["theta"], self.state.theta = self.state.theta, own
+        return landed
 
     # An end-of-set redo: the undiscounted slot share, and each shadow's error for the set.
     def _redoes_at_end(self, item, set_delta):

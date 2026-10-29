@@ -147,6 +147,21 @@ def fig9():
             f"{_model(c, skip=('g', 'BOUND'))}{_changed('controller_full')}")
 
 
+def fig8lhc():
+    c = _c("controller_full")
+    d = c["conditions"]
+    return (f"{_hypercube(d)}. Each plays the app's task (question types with Elo ratings, "
+            f"skips on) for {d['checkpoints'][-1]} ticks four times with the same seed: at "
+            f"the fixed default setting; with a random setting drawn at the start and at each "
+            f"return after stopping; with the engagement maximizer (the setting whose rollouts "
+            f"keep the person in the task longest); and with information planning on f, k and "
+            f"γ. The last three choose among the same 384 settings (the 84 scheduled-review "
+            f"ones, redo prompts mid-set with feedback shown or at the end of the set with it "
+            f"hidden, each at 2, 4, 6 or 8 questions per set), and both planners fit f, k, γ, "
+            f"BOUND and T0. All five fitted by maximum likelihood at {_list(d['checkpoints'])} "
+            f"ticks in every arm. {_model(c, skip=('g', 'BOUND'))}{_changed('controller_full')}")
+
+
 def figS10():
     c = _c("feedback_blocks")
     d = c["conditions"]
@@ -355,7 +370,7 @@ def identifiability():
 
 
 CAPTIONS = {"fig1": fig1, "fig2": fig2, "fig3": fig3, "fig4": fig4, "fig4lhc": fig4lhc,
-            "fig5": fig5, "fig6": fig6, "fig7": fig7, "fig8": fig8, "fig9": fig9,
+            "fig5": fig5, "fig6": fig6, "fig7": fig7, "fig8": fig8, "fig8lhc": fig8lhc, "fig9": fig9,
             "figS2": figS2, "figS3": figS3, "figS4": figS4, "figS5": figS5, "figS6": figS6,
             "figS7": figS7, "figS8": figS8, "figS9": figS9, "figS10": figS10, "figS11": figS11,
             "identifiability": identifiability}
@@ -369,6 +384,6 @@ READS = {"fig4": ("recovery_sweep",), "figS2": ("recovery_sweep",),
          "fig6": ("recovery_sweep", "pipelines", "precision_full"),
          "figS3": ("fit_factorial",), "fig7": ("task_choice", "gamma_feedback"),
          "figS4": ("task_choice",), "figS6": ("gamma_feedback",),
-         "fig8": ("controllers",), "figS5": ("controllers",), "fig9": ("controller_full",),
+         "fig8": ("controllers",), "figS5": ("controllers",), "fig8lhc": ("controller_full",), "fig9": ("controller_full",),
          "figS8": ("lhc_size",), "figS9": ("alpha_reward",),
          "figS10": ("feedback_blocks",), "figS11": ("redo_pressure",)}

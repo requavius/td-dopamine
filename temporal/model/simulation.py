@@ -16,13 +16,14 @@ from .params import ModelState, UserParams
 from .persistence import conditions, draw_quit_time, draw_solve_seconds, quit_drift
 from .pressure import pressured_decision
 from .questions import choose_type
-from .value import ACHIEVEMENT_SCALE, slot_reward, value_of_stage
+from .value import ACHIEVEMENT_SCALE, late_reward, slot_reward, value_of_stage
 
 MAX_TICKS = 1_000_000  # a safety cap; the lapse mixture keeps every return chance above ~1%
 
 # Who decides whether a missed question comes back: the controller at review_rate per
-# slot (scheduled), the learner at the repeat node (choice), or nobody (quiet).
-REVIEW_MODES = ("scheduled", "choice", "quiet")
+# slot (scheduled), the learner at the repeat node (choice), nobody (quiet), or the task,
+# which redoes every seen miss with no decision (forced: the app's "repeats").
+REVIEW_MODES = ("scheduled", "choice", "quiet", "forced")
 
 # What a set is worth: right answers weighted by (1 - p) (achievement), or the plain
 # fraction right (accuracy, the earlier model).
@@ -34,7 +35,8 @@ class Simulation:
     def __init__(self, params: UserParams, ability=None, reentry_cost=None,
                  review_mode="scheduled", review_rate=0.25, diff_spread=0.0,
                  target_p=0.75, feedback=True, ratings=None, reward="achievement",
-                 skips=False, return_skipped=False, end_redos=False, redo_deadline=None):
+                 skips=False, return_skipped=False, end_redos=False, redo_deadline=None,
+                 show_score=True, end_feedback=False):
         if review_mode not in REVIEW_MODES:
             raise ValueError(f"review_mode must be one of {REVIEW_MODES}, got {review_mode!r}")
         if not 0.0 <= review_rate <= 1.0:
@@ -49,11 +51,17 @@ class Simulation:
         self.feedback = feedback # whether right/wrong is shown during a set
         self.ratings = ratings   # what the environment knows; None: use the true difficulties
         self.reward = reward
+        # The score on screen is the (1 - p)-weighted reward. With it hidden only right and
+        # wrong are seen, so what lands is the fraction right, whatever `reward` is.
+        self.show_score = show_score
         self.skips = skips       # whether the learner can give up on a question (persistence.py)
         self.return_skipped = return_skipped # whether given-up questions come back through review
         # With feedback hidden and the learner deciding redos: offer them after the end-of-set
         # score, for every new question missed in the set, instead of not at all.
         self.end_redos = end_redos
+        # Whether such a redo's outcome is shown, with its points (the app's, since
+        # 2026-10-29). Shown, what it earns lands at once; not shown, nothing does.
+        self.end_feedback = end_feedback
         # Seconds on a countdown at every redo prompt (pressure.py); None: no countdown.
         self.redo_deadline = redo_deadline
         self.cold_start = False # whether the set about to be played was started from outside a session
@@ -158,8 +166,10 @@ class Simulation:
         return choice["chose"] == 1
 
     # A redo taken on the end-of-set screen: an extra question after the set, as a redo is
-    # in the app. It can be given up on; answered right it is a correction. The set's reward
-    # has been paid, so it lands no reward on the value learner; it counts in total reward.
+    # in the app. It can be given up on; answered right it is a correction, and counts in
+    # total reward but not in the set's score. With `end_feedback` its outcome is shown, so
+    # what it earns lands as more reward on the set's last step (value.late_reward); without
+    # it nothing lands. Returns the error that landed, 0 if none.
     def _extra_question(self, item, set_delta):
         state = self.state
         p_item = success_prob(state, item)
@@ -167,14 +177,21 @@ class Simulation:
         try:
             if self.skips and self._gives_up(item, p_item, True):
                 state.skips += 1
-                return
+                return 0.0
         finally:
             state.slot_delta = saved
         success = draw_outcome(state, item)
         update_ability(state, item, success, True)
         state.challenge += 1.0 - p_item
-        if success:
-            state.total_reward += 1.0 - p_item
+        if not success:
+            return 0.0
+        state.total_reward += 1.0 - p_item
+        if not self.end_feedback:
+            return 0.0
+        earned = (1.0 - p_item if self.reward == "achievement" and self.show_score
+                  else 1.0 / ACHIEVEMENT_SCALE)
+        n = state.stage_amt
+        return late_reward(state, self.params, n - 1, ACHIEVEMENT_SCALE * earned / n)
 
     # One episode: exactly `stage_amt` slots, one question each.
     def run_episode(self):
@@ -240,9 +257,10 @@ class Simulation:
             # end-of-set score if they are not: a miss they see is a slot that paid
             # nothing against a value that expected something, which is the negative
             # error. A miss they never see cannot produce one.
-            # `slot_reward` works on the achievement scale, so the accuracy reward --
-            # the earlier model, kept for comparison -- is divided back out of it.
-            earned = (achievement if self.reward == "achievement"
+            # `slot_reward` works on the achievement scale, so the accuracy reward (the
+            # earlier model, and what a set pays with the score hidden) is divided back
+            # out of it.
+            earned = (achievement if self.reward == "achievement" and self.show_score
                       else passed / ACHIEVEMENT_SCALE)
             self.achievement_so_far = achievement  # for learners that assume the achievement reward
             self.passed_so_far = passed            # for learners that assume the accuracy reward
@@ -255,14 +273,20 @@ class Simulation:
             # that lands, and then they decide whether to take the question again.
             if missed_new and self.review_mode == "choice" and self._redoes(s, item):
                 carry = item
+            elif missed_new and self.review_mode == "forced":
+                carry = item
 
         # The end-of-set screen: the score has landed, and each miss it shows can be redone.
-        extra = 0
+        # What a redo shown there earns adds to the set's error, which the next prompt and
+        # the next start decision carry.
+        extra, late = 0, 0.0
         if self.end_redos and self.review_mode == "choice" and not self.feedback:
             set_delta = float(sum(deltas))
             for item in unseen:
                 if self._redoes_at_end(item, set_delta):
-                    self._extra_question(item, set_delta)
+                    landed = self._extra_question(item, set_delta)
+                    set_delta += landed
+                    late += landed
                     extra += 1
 
         # What the next start decision sees of the set just played. An end-of-set redo is
@@ -278,7 +302,7 @@ class Simulation:
         state.last_unseen_miss = 0.0 if self.feedback else wrong / n
         # How the set went against what was predicted of it, carried into the decision
         # to start another one.
-        state.last_set_delta = float(sum(deltas))
+        state.last_set_delta = float(sum(deltas)) + late
         state.episodes += 1
         return deltas
 

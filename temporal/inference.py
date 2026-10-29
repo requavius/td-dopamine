@@ -4,8 +4,10 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import pyddm
+from scipy.optimize import minimize
 
-from .model.accumulator import T_DUR, build_model
+from . import fastlik
+from .model.accumulator import BOUND, T_DUR, build_model
 from .model.persistence import neg_log_likelihood
 
 ROW_FLOOR = 400
@@ -14,6 +16,11 @@ ROW_FLOOR = 400
 CONDITIONS = ("value", "cost")
 # Fitted non-decision time. The upper end stays under the fastest decision in the data.
 T0_BOUNDS = (0.0, 0.5)
+# λ, the share of BOUND a person keeps on a redo prompt under a countdown
+# (model/pressure.py): its prior, N(mean, sd), and its range. The prior is
+# experiments.controller_all's; with no countdown in the record λ stays at its mean.
+LAM_PRIOR = (0.7, 0.2)
+LAM_BOUNDS = (0.2, 1.5)
 
 
 # Decided trials as rows; undecided ones as counts per condition.
@@ -121,6 +128,44 @@ def fit(df, attempts=None, t0=False):
     if t0:
         out += (float(model.parameters()["overlay"]["nondectime"]),)
     return out
+
+
+# Decision records as arrays for the closed-form likelihood: go (1, 0, or -1 when no bound
+# was reached by the deadline), rt, value, cost, and each one's countdown in seconds (NaN
+# for none). A click slower than the deadline is undecided, as in passages_to_frame.
+def decision_arrays(passages):
+    deadline = np.array([p.get("deadline") or np.nan for p in passages], dtype=float)
+    t_dur = np.where(np.isnan(deadline), T_DUR, deadline)
+    rt = np.array([np.nan if p["RT"] is None else p["RT"] for p in passages], dtype=float)
+    go = np.array([-1 if p["GO"] is None or not r <= t else p["GO"]
+                   for p, r, t in zip(passages, rt, t_dur)], dtype=np.int8)
+    value = np.array([float(p.get("value") or 0.0) for p in passages])
+    cost = np.array([float(p.get("cost") or 0.0) for p in passages])
+    return go, rt, value, cost, deadline
+
+
+# (f, k, T0, λ) by maximum likelihood in closed form (temporal.fastlik), from decision
+# records. A redo prompt under a countdown is read at bound λ·BOUND and its own deadline,
+# every other decision at BOUND and T_DUR. λ alone has a prior (LAM_PRIOR). With no
+# countdown in the record this is `fit(..., t0=True)` with the closed form in place of
+# pyddm's solution, which agrees with it within 0.2% of the density's peak.
+def fit_closed_form(passages):
+    go, rt, value, cost, deadline = decision_arrays(passages)
+    timed = ~np.isnan(deadline)
+    t_dur = np.where(timed, deadline, T_DUR)
+
+    def loss(th):
+        f, k, t0, lam = th
+        bound = BOUND * np.where(timed, lam, 1.0)
+        nll = fastlik.neg_log_likelihood(go, rt, f * value - k * cost, bound, t0, t_dur=t_dur)
+        return nll + 0.5 * ((lam - LAM_PRIOR[0]) / LAM_PRIOR[1]) ** 2
+
+    bounds = [(0.0, 3.0), (0.0, 3.0), T0_BOUNDS, LAM_BOUNDS]
+    starts = [(0.8, 0.8, 0.1, LAM_PRIOR[0]), (1.6, 1.6, 0.1, LAM_PRIOR[0]),
+              (0.4, 0.4, 0.3, 1.0)]
+    best = min((minimize(loss, x, method="L-BFGS-B", bounds=bounds) for x in starts),
+               key=lambda r: r.fun)
+    return tuple(float(x) for x in best.x)
 
 
 def assert_row_floor(df):

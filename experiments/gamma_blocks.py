@@ -17,7 +17,7 @@ Everything else is gamma_profile's: the app's task, 300 start decisions plus the
 decisions, people (f, k) (0.8, 0.8), (1.2, 0.4), (0.6, 1.2), true γ 0.7, 0.8, 0.9, 0.95,
 the same grid and fit. Constants: α 0.05, BOUND 1.5, SIGMA 0.7, ACHIEVEMENT_SCALE 4,
 continuing bootstrap, T_DUR 7.0, T0 0. The simulated person is paid the end-of-set reward
-with feedback hidden, which the app does not show yet: this is the best case.
+with feedback hidden, as the app's score has shown it since 2026-10-28.
 
 Sharpness of a run is how much -log L rises from the true γ to the best grid γ more than
 0.1 away from it: min over |γ − γ_true| > 0.1 of nll(γ) − nll(γ_true).

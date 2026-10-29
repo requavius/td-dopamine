@@ -1,4 +1,10 @@
-"""Planning with fitted γ and bound: a controller that measures all five parameters.
+"""Planning with fitted γ and bound, and the controller comparisons on the same 128 people.
+
+The runs here, each section below with its claims: the app's InfoController against
+FullInfoController (2026-10-28); the baselines over InfoController's 96 settings (retired,
+RETIRED.md); InfoController and reward planning with end-of-set redos and set length; and
+four controllers, all five parameters fitted (README, "Four controllers").
+
 
 InfoController, the app's controller, fits f, k and T0 with γ held at 0.9 and BOUND at
 1.5, rolls out settings with those values, and scores a setting by how much it would
@@ -40,7 +46,76 @@ Claims, fixed before any run (2026-10-28), paired on person, at 300 ticks:
     F5  none: report BOUND and T0 errors, reward, time away, decisions, redo decisions,
         and the share of start decisions made after a set with feedback shown, by true γ
 
+Baselines (added 2026-10-29, after the current and full arms' results were read, and
+before any baseline was run). The same 128 people and seeds, fitted the same way, under
+the ways of choosing settings that do not plan to measure. Every arm that chooses has all
+96 settings (CANDIDATES), redo prompts included:
+    fixed   the default setting throughout
+    random  a random setting every 25 start decisions, from all 96
+    reward  reward planning over all 96, fitting f and k with γ at 0.9 and BOUND at 1.5,
+            as InfoController does
+
+Claims, fixed before the baseline run (2026-10-29), paired on person, at 300 ticks:
+    C1  squared error in k, current − reward, is below zero beyond 2 SE
+    C2  squared error in k, current − fixed, is below zero beyond 2 SE
+    C3  squared error in f, current − reward, is not above zero beyond 2 SE
+    C4  P(start next set), current − reward, is not below zero beyond 2 SE
+    C5  none: the same differences against every baseline at 100, 200 and 300 ticks;
+        γ, BOUND and T0 errors; reward, time away and start decisions, for every arm
+
+With end-of-set redos (added 2026-10-29, after the baselines' results were read). Those
+96 settings include six with redo prompts and feedback hidden, which never offer a redo:
+a hidden miss is never shown. Here they are replaced by the six end-of-set ones
+(controller.REDO_END, as experiments.feedback_blocks), with each redo's outcome shown as
+the app shows it (end_feedback), so every redo-prompt setting yields redo decisions. Set
+length is a lever too, as in the app: each of the 96 at 2, 4, 6 and 8 questions per set
+(controller.STAGE_LEVELS), 384 in all. Every arm that chooses has these (END_SETTINGS);
+the fixed default (4 per set) is unchanged and reused. Set length has no recovery result
+of its own yet; this is the first.
+    info_end    InfoController
+    random_end  a random setting every 25 start decisions
+    reward_end  reward planning
+
+Claims, fixed before the end-of-set run (2026-10-29), paired on person, at 300 ticks:
+    K1  squared error in k, info_end − reward_end, is below zero beyond 2 SE
+    K2  squared error in k, info_end − fixed, is below zero beyond 2 SE
+    K3  squared error in f, info_end − reward_end, is not above zero beyond 2 SE
+    K4  P(start next set), info_end − reward_end, is not below zero beyond 2 SE
+    K5  none: as C5, plus the share of start decisions after a hidden set and the redo
+        decisions made at the end of the set, per arm
+
+Four controllers, every one with f, k, γ, BOUND and T0 (added 2026-10-29, after the
+end-of-set run's results were read). The fixed default is reused. The other three choose
+among END_SETTINGS, and the two that plan fit, draw and roll out all five parameters as
+FullInfoController does:
+    random_return  a random setting at the start, and again each time the person comes
+                   back after stopping, applied before the set they come back to
+    engage         EngagementController: the setting whose rollouts keep the person in the
+                   task for the largest share of ticks, over 50-tick rollouts. A stop costs
+                   the ticks until they come back, so this rewards both starting the next
+                   set and returning
+    info_fkg       FkgInfoController: the rise in log det of the information about f, k
+                   and γ, with BOUND and T0 as nuisances (the Schur complement; Ds-optimal),
+                   and InfoController's safety floor
+Both planners plan every 25 start decisions and roll every setting out on the same seed
+per draw, so settings are compared on the same luck. Every arm's data are fitted with all
+five free at 100, 200 and 300 ticks, as before.
+
+Claims, fixed before the four-controller run (2026-10-29), paired on person, at 300 ticks:
+    H1  squared error in γ, info_fkg − engage, is below zero beyond 2 SE
+    H2  squared error in k, info_fkg − engage, is below zero beyond 2 SE
+    H3  squared error in f, info_fkg − engage, is not above zero beyond 2 SE
+    H4  share of ticks in the task, engage − fixed, is above zero beyond 2 SE
+    H5  none: every arm's RMSEs at 100, 200 and 300 ticks; P(start), time in the task,
+        start decisions and reward; the settings each chose
+
     python -m experiments.controller_full --people 0-63 --tag server
+    python -m experiments.controller_full --arms fixed,random,reward --people 0-89 --tag server_base
+    python -m experiments.controller_full --arms fixed,random,reward --people 90-127 --tag mac_base
+    python -m experiments.controller_full --arms info_end,random_end,reward_end --people 0-89 --tag server_end
+    python -m experiments.controller_full --arms info_end,random_end,reward_end --people 90-127 --tag mac_end
+    python -m experiments.controller_full --arms random_return,engage,info_fkg --people 0-89 --tag server_four
+    python -m experiments.controller_full --arms random_return,engage,info_fkg --people 90-127 --tag mac_four
     python -m experiments.controller_full --replot
 """
 import argparse
@@ -56,7 +131,10 @@ from scipy.optimize import minimize
 from scipy.stats import qmc
 
 from temporal import fastlik
-from temporal.controller import (DRAWS, MIN_ROWS, MU_GRID, Estimate, InfoController, Update,
+from temporal.controller import (DRAWS, MIN_ROWS, MU_GRID, REDO, REDO_END, SCHEDULED, STAGE_LEVELS,
+                                 Controller,
+                                 Environment,
+                                 Estimate, InfoController, Update,
                                  apply, decided_rows, estimate_patience, logdet, measured)
 from temporal.model import accumulator as acc
 from temporal.model import persistence
@@ -80,6 +158,13 @@ RANGES = D.ranges
 CHECKPOINTS = D.checkpoints
 N_TICKS = CHECKPOINTS[-1]
 ARMS = ("current", "full")
+BASELINES = ("fixed", "random", "reward")
+END_ARMS = ("info_end", "random_end", "reward_end")
+# Every redo-prompt setting offers redos: mid-set with feedback shown, at the end of the set
+# with it hidden, each redo's outcome shown.
+_END_96 = (SCHEDULED + tuple(e for e in REDO if e.feedback)
+           + tuple(dataclasses.replace(e, end_feedback=True) for e in REDO_END))
+END_SETTINGS = tuple(dataclasses.replace(e, stage_amt=n) for n in STAGE_LEVELS for e in _END_96)
 
 PRIOR_MEAN = np.array([0.8, 0.8, 0.85, 1.5, 0.2])  # f, k, γ, BOUND, T0
 PRIOR_SDS = np.array([0.5, 0.5, 0.1, 0.3, 0.15])
@@ -88,6 +173,8 @@ DRAW_HI = np.array([2.5, 2.5, 0.99, 2.5, 0.5])
 H_G = 0.02         # γ step for ∂v/∂γ in a rollout
 BOUND_STEP = 0.05  # rollout bounds are snapped to this, so their draw tables are reused
 STEPS = np.array([0.01, 0.01, 0.005, 0.01, 0.005])
+ENGAGE_HORIZON = 50  # ticks per engagement rollout: time away plays out slowly
+FOUR_ARMS = ("random_return", "engage", "info_fkg")
 
 
 def people():
@@ -208,6 +295,9 @@ class FullInfoController(InfoController):
     `plan(state, shadow)`: `state` as measured, its records carrying `parts_by_g`;
     `shadow` the replay learners, γ → {"theta", "slot", "set"} (GridShadow.shadow)."""
 
+    same_luck = False  # one seed per draw, shared by every setting
+    scored = "information about 5 parameters"
+
     def __init__(self, grid=G_FINE, **kw):
         super().__init__(**kw)
         self.grid = tuple(grid)
@@ -260,23 +350,29 @@ class FullInfoController(InfoController):
                          review_rate=env.review_rate, target_p=env.target_p,
                          feedback=env.feedback, skips=True, return_skipped=env.return_skipped)
         sim.state = st
+        apply(sim, env)  # end-of-set redos, their feedback and set length too
         for x in (lo, hi):
             sim.shadow[x].update(theta=self.replay[x]["theta"].copy(),
                                  slot=self.replay[x]["slot"], set=self.replay[x]["set"])
         random.seed(seed)
         np.random.seed(seed)
-        e0 = st.episodes
+        e0, a0 = st.episodes, st.away
         with self.bounds(round(draw[3] / BOUND_STEP) * BOUND_STEP):
             for _ in range(self.info_horizon):
                 sim.tick()
+        in_task = 1.0 - (st.away - a0) / self.info_horizon
         recs = st.initiation_passages + st.first_passage
         if not recs:
-            return np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), st.episodes - e0
+            return np.zeros((0,)), np.zeros((0,)), np.zeros((0,)), st.episodes - e0, in_task
         v = np.array([p["value"] for p in recs])
         c = np.array([p["cost"] for p in recs])
         vg = np.array([(sum(p["parts_by_g"][hi]) - sum(p["parts_by_g"][lo])) / (hi - lo)
                        for p in recs])
-        return v, c, vg, st.episodes - e0
+        return v, c, vg, st.episodes - e0, in_task
+
+    # What one rollout earns a setting: here the rise in log det of the information.
+    def _score(self, base, v, c, vg, d, table, in_task):
+        return logdet(base + information(v, c, vg, d, table)) - logdet(base) if len(v) else 0.0
 
     def _plan(self, state, params):
         rows = decided_rows(state)
@@ -308,14 +404,14 @@ class FullInfoController(InfoController):
             bases.append(base)
             tables.append(table)
 
+        seeds = [self.rng.randrange(2**31) for _ in draws] if self.same_luck else None
         scores, sets = {}, {}
         for env in self.candidates:
             gains, started = [], []
-            for d, base, table in zip(draws, bases, tables):
-                v, c, vg, n_sets = self._rollout(state, d, env, patience,
-                                                 self.rng.randrange(2**31))
-                gain = logdet(base + information(v, c, vg, d, table)) - logdet(base) if len(v) else 0.0
-                gains.append(gain)
+            for j, (d, base, table) in enumerate(zip(draws, bases, tables)):
+                seed = seeds[j] if seeds else self.rng.randrange(2**31)
+                v, c, vg, n_sets, in_task = self._rollout(state, d, env, patience, seed)
+                gains.append(self._score(base, v, c, vg, d, table, in_task))
                 started.append(n_sets)
             scores[env], sets[env] = float(np.mean(gains)), float(np.mean(started))
         floor = self.safety * max(sets.values())
@@ -325,10 +421,69 @@ class FullInfoController(InfoController):
         self.env = chosen
         self.last_plan = len(state.initiation_passages)
         update = Update(len(state.initiation_passages), self.est, previous, chosen,
-                        f"information about 5 parameters +{scores[chosen]:.2f} over {DRAWS} draws",
+                        f"{self.scored} +{scores[chosen]:.2f} over {DRAWS} draws",
                         scores)
         self.log.append(update)
         return update
+
+
+# Information about the parameters in `interest` once the others are unknown: the Schur
+# complement M_ii − M_in M_nn⁻¹ M_ni (as experiments.controller_all).
+def marginal(M, interest):
+    rest = [j for j in range(len(M)) if j not in interest]
+    i, n = np.ix_(interest, interest), np.ix_(interest, rest)
+    return M[i] - M[n] @ np.linalg.solve(M[np.ix_(rest, rest)], M[n].T)
+
+
+class FkgInfoController(FullInfoController):
+    """FullInfoController over END_SETTINGS, scored only on f, k and γ: BOUND and T0 are
+    fitted, drawn and rolled out, but a setting earns nothing for measuring them."""
+
+    INTEREST = (0, 1, 2)
+    same_luck = True
+    scored = "information about f, k and γ"
+
+    def __init__(self, candidates=END_SETTINGS, **kw):
+        super().__init__(candidates=candidates, **kw)
+
+    def _score(self, base, v, c, vg, d, table, in_task):
+        if not len(v):
+            return 0.0
+        add = information(v, c, vg, d, table)
+        return (logdet(marginal(base + add, self.INTEREST))
+                - logdet(marginal(base, self.INTEREST)))
+
+
+class EngagementController(FullInfoController):
+    """FullInfoController's estimate, draws and rollouts over END_SETTINGS, choosing the
+    setting whose rollouts spend the largest share of ticks in the task. No safety floor:
+    staying in the task is the whole score."""
+
+    same_luck = True
+    scored = "share of ticks in the task"
+
+    def __init__(self, candidates=END_SETTINGS, horizon=ENGAGE_HORIZON, **kw):
+        super().__init__(candidates=candidates, horizon=horizon, safety=0.0, **kw)
+
+    def _score(self, base, v, c, vg, d, table, in_task):
+        return in_task
+
+
+def _mean(envs, attr):
+    return float(np.mean([getattr(e, attr) for e in envs])) if envs else np.nan
+
+
+# Simulation.tick, with `on_return` run between coming back and the set it starts.
+def _tick(sim, on_return):
+    st = sim.state
+    if st.in_session:
+        return sim.tick()
+    went = sim.come_back()
+    st.t += 1
+    if went:
+        on_return()
+        sim.run_episode()
+    return went
 
 
 # ---------------------------------------------------------------- the experiment
@@ -348,6 +503,30 @@ def _fit_records(records, i):
     return Person(i, h=h).fit()
 
 
+# Random choice is told the truth only so it skips fitting, which it would not use.
+def controller(arm, truth, seed):
+    if arm == "fixed":
+        return None
+    if arm == "random":
+        return Controller(explore=1.0, seed=seed, known=(truth["f"], truth["k"]))
+    if arm == "reward":
+        return Controller(seed=seed)
+    if arm == "random_end":
+        return Controller(candidates=END_SETTINGS, explore=1.0, seed=seed,
+                          known=(truth["f"], truth["k"]))
+    if arm == "reward_end":
+        return Controller(candidates=END_SETTINGS, seed=seed)
+    if arm == "info_end":
+        return InfoController(candidates=END_SETTINGS, seed=seed)
+    if arm == "engage":
+        return EngagementController(seed=seed)
+    if arm == "info_fkg":
+        return FkgInfoController(seed=seed)
+    if arm == "random_return":
+        return None
+    return InfoController(seed=seed) if arm == "current" else FullInfoController(seed=seed)
+
+
 def _one(task):
     arm, i = task
     truth = people()[i]
@@ -355,8 +534,14 @@ def _one(task):
     acc.clear_caches()
     random.seed(seed)
     np.random.seed(seed)
-    ctl = InfoController(seed=seed) if arm == "current" else FullInfoController(seed=seed)
-    start = ctl.env
+    ctl = controller(arm, truth, seed)
+    start = ctl.env if ctl else Environment()
+    # The random arm: its own stream, so it draws the same settings whatever else runs.
+    picks = []
+    if arm == "random_return":
+        pick_rng = random.Random(1_000_003 * seed)
+        start = pick_rng.choice(END_SETTINGS)
+        picks.append(start)
     ratings = Ratings()
     person = PersonConstants(acc.SIGMA, truth["bound"])
     sim = GridShadow(UserParams(f=truth["f"], k=truth["k"], g=truth["g"], t0=truth["t0"]),
@@ -365,6 +550,12 @@ def _one(task):
                      feedback=start.feedback, ratings=ratings, skips=True,
                      return_skipped=start.return_skipped)
     st = sim.state
+    if arm == "random_return":
+        apply(sim, start)
+
+        def on_return():
+            picks.append(pick_rng.choice(END_SETTINGS))
+            apply(sim, picks[-1])
     st.type_diffs = np.array(synthetic_type_diffs(1.0), dtype=float)
     st.ability = 0.0
     st.in_session = True
@@ -376,12 +567,15 @@ def _one(task):
         mark = dict(reward=st.total_reward, away=st.away, starts=0, ticks=0)
         while st.t < t_start + N_TICKS:
             with person():
-                sim.tick()
+                if arm == "random_return":
+                    _tick(sim, on_return)
+                else:
+                    sim.tick()
             person.trim()
             if len(acc._SOLUTION_CACHE) > CACHE_CAP:
                 acc.clear_caches()
-            if ctl.due(st):
-                if arm == "current":
+            if ctl is not None and ctl.due(st):
+                if not isinstance(ctl, FullInfoController):
                     ctl.plan(sim.app_view(ratings), UserParams(f=truth["f"], k=truth["k"]))
                 else:
                     ctl.plan(measured(st, ratings), sim.shadow)
@@ -395,15 +589,15 @@ def _one(task):
                                    if starts else np.nan))
                 mark = dict(reward=st.total_reward, away=st.away,
                             starts=len(st.initiation_passages), ticks=n)
+        chosen = [u.chosen for u in ctl.log] if ctl else picks
         row = dict(arm=arm, person=i, seed=seed, **{f"true_{n}": truth[n] for n in NAMES},
                    reward=sum(b["reward"] for b in blocks), away=st.away / N_TICKS,
                    decisions=len(st.initiation_passages), redos=len(st.first_passage),
+                   end_redos=sum(bool(p.get("end")) for p in st.first_passage),
                    p_go=float(np.mean([p["chose"] == 1 for p in st.initiation_passages])),
                    feedback_share=float(np.mean([p["feedback"] for p in st.initiation_passages])),
-                   redo_settings=float(np.mean([u.chosen.redo_prompts for u in ctl.log]))
-                   if ctl.log else np.nan,
-                   target=float(np.mean([u.chosen.target_p for u in ctl.log]))
-                   if ctl.log else np.nan)
+                   redo_settings=_mean(chosen, "redo_prompts"), target=_mean(chosen, "target_p"),
+                   stages=_mean(chosen, "stage_amt"), end_settings=_mean(chosen, "end_redos"))
         for b in blocks:
             n = b["ticks"]
             recs = _records_until(st, b["t"])
@@ -456,6 +650,112 @@ def summarize(df):
               f"{full.loc[idx, 'feedback_share'].mean():.2f} ({len(idx)} people)")
 
 
+def summarize_baselines(df, end=False):
+    info, base, tag = (("info_end", ("fixed", "random_end", "reward_end"), "K") if end
+                       else ("current", BASELINES, "C"))
+    reward = base[-1]
+    arms = [a for a in base + (info,) if a in set(df.arm)]
+    by = {a: df[df.arm == a].drop_duplicates("person").set_index("person").sort_index()
+          for a in arms}
+    print(f"\n== {'with end-of-set redos' if end else 'every arm'}, all five fitted, {N_TICKS} ticks ==")
+    print(f"{'arm':>17} {'n':>4} " + " ".join(f"{name + ' ' + str(n):>9}" for name in ("f", "k", "g")
+                                         for n in CHECKPOINTS)
+          + f" {'P(start)':>9} {'reward':>7} {'away':>6} {'starts':>7} {'shown':>6}")
+    for a in arms:
+        d = by[a]
+        cells = [np.sqrt(np.nanmean((d[f"{name}_{n}"] - d[f"true_{name}"]) ** 2))
+                 for name in ("f", "k", "g") for n in CHECKPOINTS]
+        print(f"{a:>17} {len(d):4d} " + " ".join(f"{c:9.3f}" for c in cells)
+              + f" {d.p_go.mean():9.3f} {d.reward.mean():7.1f} {d.away.mean():6.2f} "
+              f"{d.decisions.mean():7.1f} {d.feedback_share.mean():6.2f}")
+
+    def sq(a, name, n, idx):
+        d = by[a].loc[idx]
+        return (d[f"{name}_{n}"] - d[f"true_{name}"]) ** 2
+
+    def diff(a, b, name, n=N_TICKS):
+        idx = by[a].index.intersection(by[b].index)
+        return (sq(a, name, n, idx) - sq(b, name, n, idx)).dropna()
+
+    if not {info, reward, "fixed"} <= set(arms):
+        return
+    print(f"\nclaims, paired over people at {N_TICKS} ticks:")
+    for claim, b, name, want in ((f"{tag}1", reward, "k", "below"), (f"{tag}2", "fixed", "k", "below"),
+                                 (f"{tag}3", reward, "f", "not above")):
+        d = diff(info, b, name)
+        ok = d.mean() < -2 * se(d) if want == "below" else d.mean() <= 2 * se(d)
+        print(f"  {claim} squared error in {name}, {info} − {b}: {d.mean():+.4f} ± {se(d):.4f} "
+              f"({'holds' if ok else 'does not hold'})")
+    idx = by[info].index.intersection(by[reward].index)
+    d = (by[info].p_go.loc[idx] - by[reward].p_go.loc[idx]).dropna()
+    print(f"  {tag}4 P(start), {info} − {reward}: {d.mean():+.3f} ± {se(d):.3f} "
+          f"({'holds' if d.mean() >= -2 * se(d) else 'does not hold'})")
+    print(f"\n{tag}5 (descriptive): squared error, {info} − each baseline, mean ± SE")
+    for b in [x for x in base if x in arms]:
+        cells = [f"{name} {n}: {diff(info, b, name, n).mean():+.4f} ± {se(diff(info, b, name, n)):.4f}"
+                 for name in ("f", "k", "g") for n in (100, N_TICKS)]
+        print(f"  {info} − {b}: " + "; ".join(cells))
+    if end:
+        print("  set length chosen, mean over updates: "
+              + ", ".join(f"{a} {by[a].stages.mean():.1f}" for a in arms if "stages" in by[a]))
+        print("  end-of-set redos per person: "
+              + ", ".join(f"{a} {by[a].end_redos.mean():.1f}" for a in arms if "end_redos" in by[a]))
+
+
+def summarize_four(df):
+    arms = [a for a in ("fixed",) + FOUR_ARMS if a in set(df.arm)]
+    if not {"engage", "info_fkg", "fixed"} <= set(arms):
+        return
+    by = {a: df[df.arm == a].drop_duplicates("person").set_index("person").sort_index()
+          for a in arms}
+    print(f"\n== four controllers, all five fitted, {N_TICKS} ticks ==")
+    print(f"{'arm':>14} {'n':>4} " + " ".join(f"{name + ' ' + str(n):>8}" for name in ("f", "k", "g")
+                                         for n in CHECKPOINTS)
+          + f" {'in task':>8} {'P(start)':>9} {'starts':>7} {'reward':>7} {'shown':>6} "
+          f"{'end':>5} {'length':>6} {'target':>6}")
+    for a in arms:
+        d = by[a]
+        cells = [np.sqrt(np.nanmean((d[f"{name}_{n}"] - d[f"true_{name}"]) ** 2))
+                 for name in ("f", "k", "g") for n in CHECKPOINTS]
+        print(f"{a:>14} {len(d):4d} " + " ".join(f"{c:8.3f}" for c in cells)
+              + f" {1 - d.away.mean():8.3f} {d.p_go.mean():9.3f} {d.decisions.mean():7.1f} "
+              f"{d.reward.mean():7.1f} {d.feedback_share.mean():6.2f} "
+              f"{d.get('end_redos', pd.Series(np.nan)).mean():5.0f} "
+              f"{d.get('stages', pd.Series(np.nan)).mean():6.1f} "
+              f"{d.get('target', pd.Series(np.nan)).mean():6.2f}")
+
+    def sq(a, name, idx):
+        d = by[a].loc[idx]
+        return (d[f"{name}_{N_TICKS}"] - d[f"true_{name}"]) ** 2
+
+    idx = by["info_fkg"].index.intersection(by["engage"].index)
+    print(f"\nclaims, paired over people at {N_TICKS} ticks:")
+    for claim, name, want in (("H1", "g", "below"), ("H2", "k", "below"), ("H3", "f", "not above")):
+        d = (sq("info_fkg", name, idx) - sq("engage", name, idx)).dropna()
+        ok = d.mean() < -2 * se(d) if want == "below" else d.mean() <= 2 * se(d)
+        print(f"  {claim} squared error in {name}, info_fkg − engage: {d.mean():+.4f} ± {se(d):.4f} "
+              f"({'holds' if ok else 'does not hold'})")
+    j = by["engage"].index.intersection(by["fixed"].index)
+    d = (by["fixed"].away.loc[j] - by["engage"].away.loc[j]).dropna()
+    print(f"  H4 share of ticks in the task, engage − fixed: {d.mean():+.3f} ± {se(d):.3f} "
+          f"({'holds' if d.mean() > 2 * se(d) else 'does not hold'})")
+    print("\nH5 (descriptive): each pair, mean ± SE over people")
+    for a, b in (("info_fkg", "fixed"), ("info_fkg", "random_return"), ("engage", "random_return"),
+                 ("engage", "fixed"), ("info_fkg", "engage")):
+        if a not in by or b not in by:
+            continue
+        k = by[a].index.intersection(by[b].index)
+        parts = []
+        for name in ("f", "k", "g"):
+            d = (sq(a, name, k) - sq(b, name, k)).dropna()
+            parts.append(f"sq err {name} {d.mean():+.4f} ± {se(d):.4f}")
+        for col, lab, sign in (("away", "in task", -1), ("p_go", "P(start)", 1),
+                               ("decisions", "starts", 1), ("reward", "reward", 1)):
+            d = sign * (by[a][col].loc[k] - by[b][col].loc[k])
+            parts.append(f"{lab} {d.mean():+.3f} ± {se(d):.3f}")
+        print(f"  {a} − {b}: " + "; ".join(parts))
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--replot", action="store_true", help="merge and summarize the saved results")
@@ -470,4 +770,8 @@ if __name__ == "__main__":
         run_pool(_one, tasks, OUT / f"runs_{a.tag}.csv", fresh=True,
                  label=lambda r: f"{r['arm']} person {r['person']}")
     files = sorted(OUT.glob("runs_*.csv"))
-    summarize(pd.concat([pd.read_csv(f) for f in files], ignore_index=True))
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    summarize(df)
+    summarize_baselines(df)
+    summarize_baselines(df, end=True)
+    summarize_four(df)

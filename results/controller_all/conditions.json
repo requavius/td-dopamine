@@ -1,0 +1,35 @@
+{
+  "experiment": "controller_all",
+  "conditions": {
+    "people": 128,
+    "seed": 20261029,
+    "lam_seed": 20261033,
+    "lam_range": [
+      0.4,
+      1.0
+    ],
+    "checkpoints": [
+      100,
+      200,
+      300
+    ],
+    "countdowns": [
+      2.0,
+      3.0,
+      5.0
+    ]
+  },
+  "changed": {},
+  "model": {
+    "g": 0.9,
+    "a": 0.05,
+    "ACHIEVEMENT_SCALE": 4.0,
+    "bootstrap": "continuing",
+    "SIGMA": 0.7,
+    "BOUND": 1.5,
+    "T_DUR": 7.0
+  },
+  "date": "2026-10-28",
+  "commit": "2a64b81",
+  "command": "python -m experiments.controller_all --tag mac"
+}

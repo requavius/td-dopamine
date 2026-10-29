@@ -41,8 +41,7 @@
     "BOUND": 1.5,
     "T_DUR": 7.0
   },
-  "date": null,
-  "commit": null,
-  "command": "python -m experiments.controller_full",
-  "note": "recorded on 2026-10-28 from the experiment's defaults, which the saved results were checked against; the run itself is older"
+  "date": "2026-10-29",
+  "commit": "2a64b81",
+  "command": "python -m experiments.controller_full --arms engage --people 116-119,121-127 --tag mac_four_b"
 }

@@ -46,7 +46,8 @@ TOKEN = re.compile(r"[0-9a-f]{32}")
 EMAIL = re.compile(r"[a-z0-9_%+-][a-z0-9._%+-]*@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}")
 
 # Range each setting may take, as the desktop app's widgets allow.
-LIMITS = {"target": (0.3, 0.95), "stages": (2, 8), "cold": (0.05, 1.5), "review": (0.0, 1.0)}
+LIMITS = {"target": (0.3, 0.95), "stages": (2, 8), "cold": (0.05, 1.5), "review": (0.0, 1.0),
+          "countdown": (0.0, 10.0)}
 FORCED = ("continue", "repeat")
 
 _pool = None
@@ -102,8 +103,10 @@ class WebApp(Session):
         self.ephemeral = ephemeral # a guest's record, deleted when they leave
         self.view = {"screen": None}
         self.seq = 0
-        self.flashes = []  # shown in order before the next screen
+        self.flashes = []  # {"text", "kind"}, shown in order before the next screen
         self._decide = None
+        self._deadline = None  # seconds on the countdown of the decision on screen, if any
+        self._continue = None  # what the end-of-set summary on screen goes on to
         self._fit_future = None
         self.client_elapsed = None
         self.last_seen = time.time()
@@ -115,7 +118,7 @@ class WebApp(Session):
         pass
 
     def clear(self):
-        self._decide = None
+        self._decide = self._continue = None
 
     def refresh_stats(self):
         pass
@@ -127,17 +130,30 @@ class WebApp(Session):
     def render_problem(self, text, header):
         self.show(screen="question", text=f"{text} = ?", header="   ".join(header))
 
-    # RT is timed in the browser, from the moment the buttons are drawn.
-    def ask_decision(self, prompt, yes_label, no_label, on_done):
+    # RT is timed in the browser, from the moment the buttons are drawn, and so is a
+    # countdown: the page sends no choice when it runs out.
+    def ask_decision(self, prompt, yes_label, no_label, on_done, deadline=None):
         self.clear()
         self.prompt_at = time.perf_counter()
-        self._decide = on_done
-        self.show(screen="decision", prompt=prompt, yes=yes_label, no=no_label)
+        self._decide, self._deadline = on_done, deadline
+        self.show(screen="decision", prompt=prompt, yes=yes_label, no=no_label,
+                  deadline=deadline)
         self.decision_now["seq"] = self.seq  # the screen the browser times it from
 
     # The browser holds the flash before drawing what comes next, and starts the clock after.
+    # "correct +0.42" is styled as "correct".
     def flash(self, text, then):
-        self.flashes.append(text)
+        self.flashes.append({"text": text, "kind": text.split()[0]})
+        then()
+
+    def show_summary(self, rows, total, then):
+        self.clear()
+        self._continue = then
+        self.show(screen="summary", rows=[{"text": t, "outcome": o} for t, o in rows],
+                  total=total)
+
+    def proceed(self):
+        then, self._continue = self._continue, None
         then()
 
     def decide(self, go, rt):
@@ -178,7 +194,7 @@ class WebApp(Session):
             return
         attempts = attempts_to_frame(self.state.persistence)
         self.fit_result = f"fitting {len(df)} rows, {len(attempts)} questions..."
-        self._fit_future = self.executor().submit(fit_summary, df, attempts)
+        self._fit_future = self.executor().submit(fit_summary, self.decisions(), attempts)
 
     def poll_fit(self):
         fut = self._fit_future
@@ -197,7 +213,7 @@ class WebApp(Session):
         if self.panel:
             self.poll_fit()
             out.update(settings=self.settings(), stats=self.stats_text(), now=self.now_text(),
-                       controller=self.controller_status, fit=self.fit_result,
+                       controller=self.controller_text(), fit=self.fit_result,
                        fitting=self._fit_future is not None,
                        model=self.decision_now and model_view(self, self.decision_now))
         return out
@@ -296,7 +312,7 @@ class Timed(Token):
 
 class Decide(Token):
     seq: int
-    go: int
+    go: int | None  # None: the countdown ran out
     rt: float
 
 
@@ -376,9 +392,22 @@ def decide(body: Decide):
     pl, app = session(body.token)
     with pl.lock:
         live(pl, app, body.seq)
-        if app._decide is None or body.go not in (0, 1):
+        if app._decide is None or body.go not in (0, 1, None):
             raise HTTPException(409, "no decision on screen")
+        if body.go is None and app._deadline is None:
+            raise HTTPException(409, "that decision has no countdown")
         app.decide(body.go, max(body.rt, 0.0))
+        return app.payload()
+
+
+@api.post("/api/continue")
+def continue_(body: Timed):
+    pl, app = session(body.token)
+    with pl.lock:
+        live(pl, app, body.seq)
+        if app._continue is None:
+            raise HTTPException(409, "no summary on screen")
+        app.proceed()
         return app.payload()
 
 

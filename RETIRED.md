@@ -19,7 +19,7 @@ that did not pan out are listed at the end, by the model they belonged to.
 | V1 | 2026-05 to 2026-09-13 | `f·value − k·cost`, plus `b_seen·seen_miss + b_unseen·unseen_miss + b_fb·feedback` from mid-2026 | fraction right, then hard right answers `4·Σ(1 − p)/n` | 3.0 s | terminal (`V_next = 0`) | 5 parameters by pyddm, `T0` pinned at 0 | every start draw, at one cost (the recording flaw) |
 | V2 | 2026-09-13 to 2026-09-21 | as V1 | hard right answers | 7.0 s | continuing | as V1; `T0` free for real people from 2026-09-15 | as V1 |
 | V3 | 2026-09-21 to 2026-10-25 | `f·value − k·cost`; prediction error carried in `value`; reward lands when shown | hard right answers | 7.0 s | continuing | 2 parameters (`f`, `k`), `T0` free for real people | as V1 until 2026-09-27; then up to three stops in a row per session, and every cold start after them |
-| **V4 (current)** | since 2026-10-25 | as V3 | hard right answers | 7.0 s | continuing | as V3 | what the app records: one stop ends the session, time away and the cold start on return are not recorded, and a choice slower than `T_DUR` is still carried out |
+| **V4 (current)** | since 2026-10-25 | as V3 | hard right answers | 7.0 s | continuing | as V3; since 2026-10-28 also `f`, `k`, γ, `BOUND` and `T0` together in closed form, and since 2026-10-29 the app's `f`, `k`, `T0` and λ in closed form | what the app records: one stop ends the session, time away and the cold start on return are not recorded, and a choice slower than `T_DUR` is still carried out |
 
 Changes under V3 that did not change the model: the information-seeking controller and
 redo-prompt settings (2026-10-11), the package restructure (2026-10-11, regression tests
@@ -55,9 +55,37 @@ seeded output is unchanged (the regression tests pass unchanged).
   `Environment.pressure`, `UserParams.pressure`). The person's bound on the prompt drops
   to `pressure` × `BOUND`, and the prompt closes without a redo at 3 s.
 
-Neither is in the app's controller or the app yet. `fastlik.neg_log_likelihood` also
-takes a bound and a deadline per decision now, which changes no likelihood computed
-before.
+The app has had end-of-set redos since 2026-10-28, as a setting that is off by default,
+along with the end-of-set score every hidden set now ends on. That changes no seeded
+output either. `fastlik.neg_log_likelihood` also takes a bound and a deadline per decision
+now, which changes no likelihood computed before.
+
+Changes under V4 on 2026-10-29, each off by default, so every seeded simulator and
+controller output is unchanged (the regression tests pass unchanged):
+- **The score display is a model setting** (`Simulation(show_score=False)`,
+  `Environment.show_score`). With the score hidden a set pays the fraction right, whatever
+  reward the person otherwise values: what is shown is the reward.
+- **"Repeats"** (`Environment.forced`, review mode `forced`): every seen miss is redone
+  in the next slot with no decision.
+- **Set length** (`Environment.stage_amt`) is carried into a simulation by `fork`, `apply`
+  and `run`.
+- **The countdown's length is a setting** (`Environment.countdown`, 3 s by default, as
+  `REDO_DEADLINE`), so a controller can choose a 2 or 5 s countdown as well.
+- **An end-of-set redo's outcome can be shown** (`Simulation(end_feedback=True)`,
+  `Environment.end_feedback`). What a right one earns then lands as more reward on the
+  set's last step (`value.late_reward`), and the next prompt and start decision carry it.
+  Off, nothing lands, as before, so `controller.REDO_END` and the feedback-blocks result
+  are unchanged. The app shows it, so `AppController`'s end-of-set settings have it on.
+- **The app runs `AppController`** instead of `InfoController`: the same score over 1104
+  settings, the four above among them, with the countdown in the app as well, and fitted
+  in closed form with λ (README, "The app's controller"). `InfoController` and its 96
+  `CANDIDATES` are unchanged, so every controller result stands for the controller it
+  names. The scripted app session in the regression tests was re-recorded because a set
+  start now records its settings; the rest of that session is unchanged.
+- **The experiments' shadow learners take an end-of-set redo's late reward**
+  (`experiments.gamma_profile.GridShadow._extra_question`), so the values a five-parameter
+  fit reads stay the person's when that redo's outcome is shown. No saved result before
+  2026-10-29 had it shown, so none changes.
 
 ---
 
@@ -932,4 +960,5 @@ came back near 0.94 whatever its true value. Replaced by the drift-diffusion mod
 | recording every start draw: stops after stops, and every cold start | V1 to V3 simulator | one stop ends the session; time away and the return are not recorded (V4) | a person in the app cannot give those rows, and they carried most of the start node's cost variation |
 | a timed-out draw counted as not starting, or not redoing | V1 to V3 simulator | the diffusion runs on past `T_DUR` to the bound it reaches; the fit still reads the draw as undecided (V4) | in the app a slow click still carries out the choice |
 | counting runs and rollouts in decisions | V1 to V3 | ticks: a start decision in a session, or a chance to come back while away (V4) | with stops unrecorded, a run counted in decisions no longer charges for time away |
+| `InfoController`'s 96 settings as the comparison's settings (2026-10-29: fixed default, random and reward planning against it on the 128 hypercube people) | V4 | 384 settings: redo prompts at the end of the set when feedback is hidden, and set length (README, "The app's InfoController and reward planning, on the same people") | six of the 96 offer redo prompts with feedback hidden, which never fire, so hiding feedback cost the measuring controller its redos and it showed feedback before 99% of start decisions. On that run `k` RMSE at 300 ticks was 0.259 under information planning against 0.729 to 0.868, and P(start) was 0.028 lower than under reward planning (`results/controller_full/runs_*_base.csv`, arms `random`, `reward`) |
 | precision table rows "cold and warm" and "warm only" | V3 | one row per kind of decision, all warm (V4) | cold starts are never recorded |

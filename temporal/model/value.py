@@ -33,6 +33,14 @@ def value_of_stage(state: ModelState, p: UserParams, s, reward=0.0):
     return delta
 
 
+# More reward on a step already taken: the error is the reward itself, at that step's
+# features (nothing else changed since the step's own update). For a redo after the
+# end-of-set score whose outcome is shown, which lands on the set's last step.
+def late_reward(state: ModelState, p: UserParams, s, reward):
+    state.theta = state.theta + p.a * reward * phi(s, state)
+    return reward
+
+
 # What arrives at a slot, on the achievement scale, given the set's achievement so far
 # and how much of it has already been paid. With feedback shown, a question's worth lands
 # the moment its outcome does; with it hidden nothing lands until the end-of-set score,

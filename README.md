@@ -33,6 +33,7 @@ model versions are in `RETIRED.md`.
 - [Terms used here](#terms-used-here)
 - [The model](#the-model)
 - [The controller](#the-controller-controllerpy)
+  - [The app's controller](#the-apps-controller-appcontroller-since-2026-10-29)
 - [Human sessions](#human-sessions-temporalapp)
 - [Current results](#current-results)
   - [Reporting conventions](#reporting-conventions)
@@ -42,7 +43,11 @@ model versions are in `RETIRED.md`.
   - [Measuring the learning rate and the reward](#measuring-the-learning-rate-and-the-reward-2026-10-28)
   - [Which difficulty and whether to show feedback](#which-difficulty-and-whether-to-show-feedback)
   - [Measuring against planning for reward](#measuring-against-planning-for-reward)
+  - [Four controllers, all five parameters fitted](#four-controllers-all-five-parameters-fitted-2026-10-29)
   - [Planning with fitted γ and bound](#planning-with-fitted-γ-and-bound-2026-10-28)
+  - [Feedback in blocks, with redos mid-set or at the end of the set](#feedback-in-blocks-with-redos-mid-set-or-at-the-end-of-the-set-2026-10-28)
+  - [A countdown on the redo prompt](#a-countdown-on-the-redo-prompt-2026-10-28)
+  - [Every parameter, every setting](#every-parameter-every-setting-2026-10-29)
 - [Methodological notes](#methodological-notes)
 - [Known limitations](#known-limitations)
 - [Next steps](#next-steps)
@@ -75,9 +80,15 @@ What has been shown, in simulation:
   too easy lose people, because right answers pay almost nothing; questions that are too
   hard lose the effort-averse. Showing right/wrong raises engagement at most difficulties,
   and more for people who discount the future steeply.
-- **Planning to measure costs no detectable reward.** The controller the app runs
-  (`InfoController`) measures `k` to RMSE 0.156 over 300 ticks, against 0.508 for a
-  controller that plans for reward, with total reward the same within the noise.
+- **Planning to measure finds `k`; keeping people in the task is what finds γ.** On 128
+  people drawn over all five parameters, all five fitted, a controller that plans for
+  information about `f`, `k` and γ measures `k` to RMSE 0.20 in 300 ticks, against 0.58 for
+  one that maximizes time in the task and 0.87 at the fixed default. γ is measured only
+  for people who give many start decisions, and the engagement maximizer gives twice as
+  many, so across the 128 neither measures γ better ("Four controllers, all five
+  parameters fitted"). When every person has γ 0.9 and `BOUND` 1.5, `InfoController`
+  measures `k` to 0.156 against 0.508 under reward planning, at no detectable cost in
+  reward.
 
 Not yet shown: anything about a real person. The app's fit still holds γ at 0.9 and the
 bound at 1.5, and collecting data from other people is not approved yet.
@@ -111,7 +122,7 @@ prediction beside each start and redo decision.
 |---|---|
 | set, slot | a set is `stage_amt` questions (4 by default), one in each slot |
 | start decision | after a set: start the next one (GO) or stop. In the app, stopping is "I'm done", which ends the session |
-| redo decision | after a miss the person is shown: take the question again, or move on. Offered only when redo prompts are on |
+| redo decision | after a miss the person is shown: take the question again, or move on. Offered only when redo prompts are on; with feedback hidden, after the set's score, when end-of-set redos are on too |
 | giving up | leaving a question while working on it: a skip, or closing the app on it |
 | warm and cold starts | a start decision in the middle of a session (cost `WARM_COST`), and coming back after leaving (cost `reentry_cost`). Only warm starts are recorded |
 | `f`, `k` | reward sensitivity and effort aversion. The drift of every decision is `f · value − k · cost` |
@@ -126,7 +137,11 @@ prediction beside each start and redo decision.
 | tick | one step of a simulation that measures engagement: a start decision in a session, or one chance to come back while away |
 | question-type task, single-`diff` task | the app's task, with question types rated per person; and the older task with one difficulty, which the recovery pipelines use |
 | shadow learners | TD learners that replay a person's rewards at other values of γ (or α), giving the value each decision would have had |
-| `Controller`, `InfoController` | the controllers that plan for reward and plan to measure `f` and `k`. The app runs `InfoController` |
+| `Controller`, `InfoController`, `AppController` | the controllers that plan for reward and plan to measure `f` and `k`, and the app's: `InfoController` over every setting the app has, since 2026-10-29 |
+| engagement maximizer, information planning | the two planners of "Four controllers" (`experiments/controller_full.py`): the setting that keeps a person in the task for the most ticks, and the one that would most sharpen `f`, `k` and γ. Both fit all five parameters |
+| ticks in the task | the share of ticks a person spends in a session rather than away: 1 − time away |
+| λ | the share of `BOUND` a person keeps on a redo prompt under a countdown; fitted by the app |
+| score | the TD reward landed since the app was opened, as the app shows it |
 | V4 | the current model version. Earlier ones are defined in `RETIRED.md` |
 | beyond 2 SE | the rule for every claim: a paired difference counts only if it exceeds twice its standard error |
 | claims fixed before the run | what a run was meant to show, written down before any of its results were read |
@@ -436,7 +451,9 @@ needs no parameters of its own.
 
 - **Non-decision time.** Where real people are fitted (the controller's estimate and the
   interface's fit), `T0` is fitted too, bounded to [0, 0.5] s. The recovery pipelines pin it
-  at 0 ("Recovery demonstrates identifiability, not accuracy").
+  at 0 ("Recovery demonstrates identifiability, not accuracy"). Since 2026-10-29 the app
+  fits in closed form instead of with pyddm, with λ free for prompts under a countdown
+  ("The app's controller").
 - **Undecided trials are data.** A decision that reached no bound by `T_DUR` is undecided.
   That includes a *person* who took longer than 7 s to click, since pyddm refuses outright
   to fit an RT past the model's deadline. Undecided trials go back into the fit as counts
@@ -530,8 +547,10 @@ available for comparison. `value_at_choice_point` is still `V(0)`, the state bei
 
 This is what the project is for: using the estimated parameters to adjust the task so the
 person keeps engaging and keeps being challenged. There are two controllers. `Controller`
-plans for reward. `InfoController` plans to measure `f` and `k`, and is the one the app
-runs.
+plans for reward. `InfoController` plans to measure `f` and `k`, and every simulated
+controller result here is one of these two. The app runs `AppController`, which is
+`InfoController` over every setting the app has ("The app's controller"), since
+2026-10-29; until then it ran `InfoController`.
 
 ### What both controllers do
 
@@ -561,13 +580,15 @@ worth less for someone who would skip most of it. Rollouts count ticks, not deci
 the time a person would spend away after stopping earns nothing in them.
 
 The app plans in a separate process, so play continues meanwhile. One `InfoController`
-plan takes about 0.9 s ("Code layout, tests and speed").
+plan takes about 0.9 s ("Code layout, tests and speed"), and one `AppController` plan
+over 1104 settings 6 to 7 s ("The app's controller").
 
 Two settings are not levers. `reentry_cost` is left out because cheaper re-entry always
 wins, and since V4 it enters no recorded decision: it only sets how long a person stays
 away, so it says nothing about `f` or `k` either. (Under V1, setting it from the person's
 state coupled the recorded cost to value and collapsed the `k` estimate to zero.) Showing
-the stage count or the score is left out because nothing in the model represents them.
+the stage count is left out because nothing in the model represents it. The score is a
+lever of `AppController` only: what it shows is what a set pays ("Playing").
 
 ### Planning for reward (`Controller`)
 
@@ -612,6 +633,63 @@ cost in directions the data has not covered yet.
   rule about engagement.
 - **No random probes.** It varies the setting because that is what it plans for.
 
+### The app's controller (`AppController`, since 2026-10-29)
+
+*`python -m experiments.app_checks` · results 2026-10-29 in `results/app_checks/`*
+
+`AppController` (`controller.py`) is `InfoController` with every setting of the app whose
+effect the model describes, and with redo prompts under a countdown read as such.
+
+- **1104 settings** (`APP_CANDIDATES`): 6 targets × 4 set lengths (2, 4, 6, 8 questions)
+  × score shown or hidden × 23. The 23 are `InfoController`'s 14 scheduled-review settings
+  at that target; redo prompts mid-set with feedback shown, or after the score with it
+  hidden (each redo's outcome then shown, as the app does), each untimed or under a 2, 3
+  or 5 s countdown (8); and "repeats", every seen
+  miss redone with no prompt (1). The stage count is not a setting: nothing in the model
+  represents it, and it stays open until the literature on it is read.
+- **The fit** is the closed-form likelihood (`inference.fit_closed_form`, `fastlik`) with
+  `f`, `k`, `T0` and λ free, γ at 0.9 and `BOUND` at 1.5. A prompt under a countdown is
+  read at bound λ · `BOUND` and its own deadline, one that ran out as censored there. λ
+  has a prior N(0.7, 0.2) (`LAM_PRIOR`, as `experiments/controller_all.py`), so with no
+  countdown in the record it stays at 0.7. `f` and `k` are shrunk toward the prior as
+  `InfoController`'s are. The app's "fit my parameters" uses the same fit.
+- **The score** is the rise in log det of the information about `f` and `k` with λ a
+  nuisance (the Schur complement of the `(f, k, λ)` information; Ds-optimal design). With
+  no decision timed it is `InfoController`'s score exactly (`tests/test_app_controller.py`).
+  A timed decision informs its drift and its bound λ · `BOUND` at its own deadline, from
+  the closed form. `(f, k, λ)` are drawn as `InfoController` draws `(f, k)`; a drawn λ is
+  snapped to 0.05 so the countdown's draw tables are reused.
+- **Two stages, same luck.** Every setting is rolled out on the first 2 of the 6 draws
+  (25 ticks each), and the 24 best above the safety floor are scored on all 6. Every
+  setting is rolled out on the same seeds, so settings are compared on the same luck. The
+  safety floor is `InfoController`'s, at both stages.
+
+Checks, without claims (conditions in the script's docstring; γ 0.9, `BOUND` 1.5,
+`ACHIEVEMENT_SCALE` 4, continuing bootstrap, `T_DUR` 7.0 s):
+
+- **The closed-form fit is pyddm's fit, within pyddm's discretization.** On 8 simulated
+  records with no countdown (4 people, 2 seeds, 150 start decisions plus redos, `T0`
+  0.2 s), the two estimates differ by at most 2.9% in `f`, 1.4% in `k` and 0.035 s in
+  `T0`. Under the closed form, pyddm's estimate is worse than its own by a median 0.11 in
+  −log L (largest 0.63). It fits in about 0.01 s, against about 14 s for pyddm's.
+- **λ is recovered.** With a 3 s countdown on every redo prompt (f 0.9, k 0.7, λ 0.4 to
+  1.0, 2 seeds each, about 200 timed prompts of about 350 decisions), λ's RMSE was 0.018
+  and its bias +0.010; `f`'s RMSE 0.028 and `k`'s 0.116. The fit held γ and `BOUND` at the
+  truth, as the app's does.
+- **A plan takes 6 to 7 s**: 7.0 s with empty caches, then 6.8 and 6.4 s (Apple M5, after
+  80 start decisions). `InfoController` over its 96 settings took 18 s with its pyddm fit,
+  11.5 s of it the fit. In the app a fresh planning process returned the first plan in
+  4.9 s.
+
+**Not measured.** Nothing shows yet whether `AppController` measures `f` or `k` better
+than `InfoController`, or keeps people engaged as well. The nearest test is
+`AllInfoController` ("Every parameter, every setting": six fitted parameters, 132 settings
+without set length or score, scored on all six). Against `InfoController` it kept people
+engaged and measured λ, and measured `k` no better. Three of its levers are new to the model since 2026-10-29 and have no
+recovery result of their own: set length, the score display (hidden, the reward is the
+fraction right) and "repeats". Nor do the 2 and 5 s countdowns: `redo_pressure` measured λ
+under 3 s.
+
 ---
 
 ## Human sessions (`temporal/app/`)
@@ -619,14 +697,40 @@ cost in directions the data has not covered yet.
 ### Playing
 
 You answer the questions, choose whether to redo one you got wrong, and choose whether to
-start the next set. There is no countdown: both prompts wait for you, and the time to
-click is the reaction time.
+start the next set. The start prompt waits for you, and the time to click is the reaction
+time. The redo prompt waits too unless a countdown is set (below).
+
+- **The score is the TD reward.** The header shows "score 2.35": every reward that has
+  landed on the value learner since the app was opened, so it carries from set to set
+  until you quit. A right answer adds `4 · (1 − p) / n` (`ACHIEVEMENT_SCALE`, your chance
+  `p` on it, `n` questions per set) when you are shown it. With feedback hidden nothing
+  lands until the end of the set, so the score in the header does not move during the set
+  and gives no miss away. With "show score" off the header has no score, and what a set
+  pays is what you can still see: the fraction right, `1 / n` per right answer (the
+  simulator's `show_score=False`, its accuracy reward). That is a model change, decided on
+  2026-10-29: what is shown is the reward.
 
 - **"I'm done" closes the app** and is logged as the stop decision. Closing the window
   without choosing is logged as an abandon.
 - **A redo is an extra question**, not the next slot, so a set can run past `stage_amt`
   questions and its review load can exceed 1. (In the simulator's `choice` mode a redo
   takes the next slot.)
+- **A set played with feedback hidden ends on a summary**, which stays until you continue:
+  each question with your answer and whether it was right ("question 1: 3 + 8 = 11
+  correct +0.07", "question 2: 4 × 6 = 7 incorrect", or "skipped"), then the set's points
+  and the score ("+0.27 this set, score 1.33"). The right answer to a miss is not shown.
+  With the score hidden there are no points, and the total is how many were right ("3 of
+  4 right"). The summary is when the model pays the set's reward, and a question's points
+  are its share of it, so they add up to the set's. Tick "with feedback off, offer it
+  after the score" as well as the redo prompts, and each new question missed in the set is
+  then offered again, one prompt at a time ("redo question 2: 4 × 6?"). This is the
+  simulator's `end_redos`: the same redo decision at the set's last slot, carrying the
+  set's error. A redo taken there is an extra question that adds to the next start
+  decision's review load, and does not count in the set's score. Its outcome is shown at
+  once ("correct +0.61" or "wrong"), so what it earns lands then, as more reward on the
+  set's last step (`value.late_reward`, the simulator's `end_feedback`), and the next
+  prompt and the next start decision carry it. A quick right answer to it is never read
+  as a typo, because other answers have moved the ratings since the miss.
 - **Skip** (the button under the answer box, or Esc) gives up on the question on screen.
   It is logged with how long you worked on it and your predicted chance on it, and the set
   moves on to the next slot. Whether skipped questions come back is the "skipped questions
@@ -638,11 +742,22 @@ click is the reaction time.
   leaving is giving up on it, so it joins the persistence data. An exit nothing sees (a
   crash, power loss) is found on the next launch and logged as `unlogged`, with the
   question that was on screen and no time.
-- **The controller.** Tick **"controller sets target, review, feedback, skipped, redo
-  prompts"** and `InfoController` plans in a separate process every 5 start decisions and
-  moves the settings panel itself, with a line saying why. With it off, the target chance,
-  review rate, and the feedback, skipped and redo-prompt checkboxes are yours. Feedback
-  changes apply from the next set.
+- **A countdown on the redo prompt** ("countdown on redo prompts": off, 2, 3 or 5 s).
+  The prompt shows the seconds left and closes when they run out, and you move on without
+  the redo. That is `model/pressure.py`: under time pressure a person keeps only λ of their
+  bound, λ being their own. A prompt that ran out is recorded with `GO` and `RT` empty and
+  its `deadline`; a click that arrives after the deadline counts as running out. Every fit
+  the app makes reads such a prompt at bound λ · `BOUND` and its own deadline ("The app's
+  controller").
+- **"Repeats"**, with redo prompts off, redoes every miss you are shown with no prompt
+  (the simulator's `forced` review mode).
+- **The controller.** Tick **"controller sets every setting but the stage count"** and
+  `AppController` ("The app's controller") plans in a separate process every 5 start
+  decisions and moves the settings panel itself, with a line saying why: target, review
+  rate, feedback, skipped questions, redo prompts mid-set or after the score, the
+  countdown, "repeats", questions per set and the score display. With it off, they are
+  yours. Feedback, set length and the score display change from the next set. Showing the
+  stage count stays yours: nothing in the model represents it yet.
 
 ### What is saved
 
@@ -651,7 +766,12 @@ Everything persists in `data/` (gitignored):
 - `decisions.jsonl`: the record, append-only and synced to disk before the app moves on.
   It holds every start and redo decision, every answer and skip (question, type, your
   answer, your predicted chance, time on it), exits with what was on screen, retired
-  questions, set starts and ends, controller decisions and launches.
+  questions, set starts and ends, end-of-set scores (`score`, with the set's points and
+  the session's score), controller decisions and launches. A set start records the
+  settings that shape the model's account of it: set length, score display, redo prompts,
+  end-of-set redos, countdown and "repeats". A redo decision made after the score has `end`
+  and the question's text, one under a countdown has `deadline`, and an answer or skip
+  after the score has `slot` equal to the set's length.
 - `state.json`: the snapshot to pick up from: value weights, ratings, owed and skipped
   questions with their exact text, how often each came back and failed, settings, and what
   is on screen right now. It is written atomically, so a crash never leaves half a file.
@@ -784,7 +904,7 @@ Unless a result says otherwise:
 - "the grid" is `f, k ∈ {0.2, 0.6, 1.0, 1.5}` (4×4). The five-parameter runs draw people
   from a Latin hypercube instead;
 - "the app's task" is the question-type task with Elo ratings and skips on, steered by
-  `InfoController` from the default setting, as the app runs it.
+  `InfoController` from the default setting, as the app ran it until 2026-10-29.
 
 **Run length.** Recovery runs stop at a number of **recorded decisions**, since they ask how
 much data identifies `f` and `k`. Runs about engagement, reward or a controller last a
@@ -1008,8 +1128,8 @@ Claims fixed before the run:
   continuously, with the bound and `T0` free too, γ is measured to about ±0.03 ("The bound
   can be fitted"). Every person shared α, `BOUND`, `SIGMA` and the reward with the fit, the
   best case, which the next study relaxes. The simulated person is paid the end-of-set
-  reward with feedback hidden, which the app does not show yet. Only three combinations of
-  `f` and `k` were run.
+  reward with feedback hidden, as the app's score has shown it since 2026-10-28. Only three
+  combinations of `f` and `k` were run.
 
 #### When other constants are wrong
 
@@ -1103,8 +1223,8 @@ less a person starts after hidden sets depends on γ, not on `f`. Two arms, pair
 and seed, no controller, one fixed setting (aim 60% right, no scheduled review, redo
 prompts): feedback on for 25 start decisions and off for 25, alternating, against on
 throughout. The profile design's people and true γ, 2 seeds each (24 pairs). As in the
-profile, the simulated person is paid the end-of-set reward with feedback hidden, which the
-app does not show yet, so this is the best case. Sharpness is the rise in −log L from the
+profile, the simulated person is paid the end-of-set reward with feedback hidden, as the
+app's score has shown it since 2026-10-28. Sharpness is the rise in −log L from the
 true γ to the best grid γ more than 0.1 away.
 
 Claims fixed before the run: **B1**, the profile's P1 and P2 hold in at least 80% of the
@@ -1122,8 +1242,8 @@ SE.
   28.3 ± 4.9 (5.8 SE), although those sets had no redo prompts while feedback was off, and
   the blocks arm had 138 redo decisions per run against 247.
 - `f` at the estimated γ was unbiased in both arms (blocks +1 ± 2%, always on −1 ± 1%).
-- So switching feedback on a schedule is a cheap way to measure γ better, once the app shows
-  an end-of-set score ("Known limitations").
+- So switching feedback on a schedule is a cheap way to measure γ better. The app shows the
+  end-of-set score this relies on since 2026-10-28 ("Playing").
 
 ### The bound can be fitted: f, k, γ, BOUND and T0 together
 
@@ -1564,7 +1684,7 @@ never saw the true `f` and `k`. γ = 0.9, `ACHIEVEMENT_SCALE = 4`, continuing bo
 - **for reward, 84 settings**: reward planning over the 84 scheduled-review settings (the
   app's controller until 2026-10-11);
 - **for reward, 96 settings**: reward planning over all 96;
-- **for information**: `InfoController` over all 96 (the app's controller).
+- **for information**: `InfoController` over all 96 (the app's controller until 2026-10-29).
 
 Pass conditions, fixed before the run and paired on person and seed at the end of the run:
 
@@ -1685,6 +1805,137 @@ intervals of the difference. Information minus each other way:
 Against reward planning, P(start) is within about ±0.04 and total reward within about ±23:
 measuring costs no engagement that these 32 people can detect at that resolution.
 
+### Four controllers, all five parameters fitted (2026-10-29)
+
+*`python -m experiments.controller_full --arms random_return,engage,info_fkg` · paper
+Figure 8 (`fig8lhc`)*
+
+Four ways of choosing settings on the 128 people of "Planning with fitted γ and bound" (a
+Latin hypercube over `f`, `k`, γ, `BOUND` and `T0`), each person's data fitted with all
+five free.
+
+- **Fixed default**: the default setting throughout (the runs of the baselines below,
+  reused).
+- **Random**: a random setting at the start, and again each time the person comes back
+  after stopping, applied before the set they come back to.
+- **Engagement maximizer** (`EngagementController`): the setting whose 50-tick rollouts
+  keep the person in the task for the largest share of ticks. A stop costs every tick
+  until they come back, so this rewards both starting the next set and returning.
+- **Information planning** (`FkgInfoController`): the rise in log det of the information
+  about `f`, `k` and γ, with `BOUND` and `T0` as nuisances (Ds-optimal), and
+  `InfoController`'s safety floor.
+
+Both planners fit, draw and roll out all five parameters as `FullInfoController` does, plan
+every 25 start decisions, and roll every setting out on the same seed per draw. The three
+that choose have the same 384 settings (`END_SETTINGS`, below). 300 ticks; α 0.05;
+cold-start cost 0.6; `ACHIEVEMENT_SCALE = 4`, continuing bootstrap, `T_DUR = 7.0`. People 0
+to 89 ran on the server and 90 to 127 on the Mac. Three Mac tasks that had started while
+V5 code was on disk were re-run under V4 (`runs_mac_four_[bcd].csv`); 19 others re-run as
+a check reproduced exactly.
+
+Claims fixed before the run, paired at 300 ticks: **H1**, squared error in γ, information
+− engagement, below zero beyond 2 SE; **H2**, the same for `k`; **H3**, squared error in
+`f`, information − engagement, not above zero beyond 2 SE; **H4**, the share of ticks in the
+task, engagement − fixed default, above zero beyond 2 SE.
+
+| how settings were chosen | f RMSE at 100 / 200 / 300 | k RMSE at 100 / 200 / 300 | γ RMSE at 300 | ticks in the task | P(start) | start decisions | total reward | feedback shown | questions per set | target |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fixed default | 0.400 / 0.388 / 0.305 | 0.954 / 0.987 / 0.868 | 0.119 | 41% | 0.73 | 123 | 45.1 | 100% | 4 | 75% |
+| random | 0.387 / 0.314 / 0.239 | 0.706 / 0.639 / 0.609 | 0.111 | 30% | 0.69 | 91 | 49.4 | 50% | 4.9 | 53% |
+| engagement | 0.260 / 0.186 / 0.173 | 0.704 / 0.625 / 0.579 | 0.090 | **58%** | **0.84** | **173** | 52.7 | 61% | 2.5 | 68% |
+| information | 0.325 / 0.242 / **0.160** | **0.368 / 0.318 / 0.201** | 0.094 | 28% | 0.71 | 83 | 82.4 | 10% | 6.3 | 42% |
+
+- **H2, H3 and H4 hold.** Squared error in `k`, information − engagement: −0.225 ± 0.053;
+  in `f`: −0.003 ± 0.009. Time in the task, engagement − fixed default: +16.8 ± 1.7 points.
+  Among people with at least 100 decisions in the fit, `k` RMSE is 0.112 under information
+  planning, against 0.34 to 0.78 under the others.
+- **H1 does not hold.** Squared error in γ, information − engagement: −0.001 ± 0.002. No
+  arm measures γ across the 128 people better than guessing the middle of its range
+  (RMSE 0.107).
+- **γ is measured where a person gives start decisions, and not otherwise.** γ RMSE at
+  300 ticks by the start decisions a person gave (people in each group):
+
+  | start decisions | fewer than 50 | 50 to 99 | 100 to 199 | 200 or more |
+  |---|---|---|---|---|
+  | fixed default | 0.177 (42) | 0.109 (19) | 0.105 (34) | 0.028 (33) |
+  | random | 0.151 (65) | 0.104 (17) | 0.032 (23) | 0.009 (23) |
+  | engagement | 0.163 (36) | 0.120 (5) | 0.051 (17) | 0.025 (70) |
+  | information | 0.129 (70) | 0.048 (11) | 0.018 (26) | 0.006 (21) |
+
+  At the same number of start decisions, information planning measures γ best, as it is
+  built to. But it keeps people out of the task, so 70 of its 128 people gave fewer than
+  50, where nothing measures γ. The engagement maximizer gave 70 people 200 or more. For γ,
+  keeping a person in the task is most of measuring them.
+- **What information planning costs** (95% t intervals over people). Against the
+  engagement maximizer: 30.2 points less time in the task [25.1, 35.3], P(start) −0.133
+  [−0.162, −0.103], 91 fewer start decisions [75, 106], and 29.6 more reward [16.1, 43.2],
+  from harder questions (a 42% target against 68%). Against the fixed default: 13.4 points
+  less time in the task [10.0, 16.8], with P(start) −0.022 [−0.052, +0.007].
+- **What each chose.** Information planning hid feedback before 90% of start decisions and
+  gave 180 end-of-set redo decisions per person, in sets of 6.3 questions. The engagement
+  maximizer chose short sets (2.5 questions; 2.1 for people with `k` up to 0.6, 2.8 above
+  1.0), easier questions, and feedback shown before 61% of start decisions.
+
+#### The app's InfoController and reward planning, on the same people
+
+*`python -m experiments.controller_full --arms info_end,random_end,reward_end`*
+
+"Measuring against planning for reward" gave every simulated person γ 0.9 and `BOUND` 1.5,
+the values both planners and their fits assume, and fitted only `f` and `k`. Here the same
+two planners, `InfoController` and reward planning, choose for the 128 people above, and
+every arm's data are fitted with all five free. Both still plan with γ at 0.9 and `BOUND`
+at 1.5.
+
+- **Settings.** Every arm that chooses has the same 384 (`END_SETTINGS`): the 84
+  scheduled-review settings; redo prompts mid-set with feedback shown, or at the end of the
+  set with feedback hidden, each redo's outcome then shown as in the app; each at 2, 4, 6
+  or 8 questions per set. So every redo-prompt setting yields redo decisions. (The 96
+  settings of `InfoController` include six with redo prompts and feedback hidden, which
+  never offer a redo; `RETIRED.md`.)
+- **Arms**, paired on person and seed: the fixed default (the default setting, 4 per set);
+  a random setting every 25 start decisions; reward planning; and `InfoController`. Both
+  planners hold γ at 0.9 and `BOUND` at 1.5.
+- 300 ticks; α 0.05; cold-start cost 0.6; `ACHIEVEMENT_SCALE = 4`, continuing bootstrap,
+  `T_DUR = 7.0`. All five parameters fitted by maximum likelihood at 100, 200 and 300 ticks.
+  The fit's shadow learners take an end-of-set redo's reward as the person does
+  (`GridShadow._extra_question`; at the person's own γ the shadow matches the person
+  exactly).
+- People 0 to 89 ran on the server and 90 to 127 on the Mac. The server rebooted after 200
+  of its 270 runs; the 70 missing were re-run on both (`runs_*_end*.csv`; tasks are seeded
+  per person, so a re-run is the same run).
+
+Claims fixed before the run, paired at 300 ticks: **K1**, squared error in `k`,
+information − reward planning, below zero beyond 2 SE; **K2**, the same against the fixed
+default; **K3**, squared error in `f`, information − reward planning, not above zero
+beyond 2 SE; **K4**, P(start), information − reward planning, not below zero beyond 2 SE.
+
+| how settings were chosen | f RMSE at 100 / 200 / 300 | k RMSE at 100 / 200 / 300 | γ RMSE at 300 | P(start) | total reward | ticks away | start decisions |
+|---|---|---|---|---|---|---|---|
+| fixed default | 0.400 / 0.388 / 0.305 | 0.954 / 0.987 / 0.868 | 0.119 | 0.73 | 45.1 | 59% | 123 |
+| random | 0.360 / 0.307 / 0.407 | 1.002 / 0.836 / 0.796 | 0.127 | 0.66 | 36.3 | 77% | 69 |
+| for reward | 0.362 / 0.284 / 0.262 | 0.871 / 0.745 / 0.712 | 0.107 | 0.71 | 147.2 | 66% | 103 |
+| for information (`InfoController`) | 0.323 / 0.358 / 0.194 | **0.482 / 0.405 / 0.336** | 0.107 | 0.70 | 71.4 | 75% | 75 |
+
+- **All four claims hold.** Squared error in `k`, information − reward planning:
+  −0.379 ± 0.092; − fixed default: −0.621 ± 0.101. `f`: −0.029 ± 0.012 against reward
+  planning, so `f` is measured no worse (better, beyond 2 SE). P(start) −0.010
+  [−0.033, +0.014].
+- **Choosing for information measures `k` better at 100 ticks than any other way does at
+  300.** The median |`k` error| at 300 ticks is 0.067, against 0.29 to 0.57 for the others,
+  and among people with at least 100 decisions in the fit (39 to 70 per arm) `k` RMSE is
+  0.098 against 0.39 to 0.78. γ is measured the same under every arm.
+- **It hides feedback and redoes misses at the end of the set.** Only 13% of its start
+  decisions followed a set with feedback shown (reward planning 90%), and it gave 160
+  end-of-set redo decisions per person (5 to 6 under the other two). It aimed at a 36%
+  chance of a right answer (reward planning 56%) and chose 6.0 questions per set on average
+  (reward planning 7.4).
+- **The cost is in time away, not in starting** (descriptive, 95% t intervals over people).
+  Against reward planning, people were away 9.2 points more of the 300 ticks [+5.4, +13.0],
+  made 28 fewer start decisions [16, 39] and earned 76 less reward [55, 97], although each
+  start decision went the same way. Against the fixed default they started slightly less
+  often (−0.028 [−0.055, −0.001]) and were away 16 points more; against random choice they
+  started more often (+0.040 [+0.012, +0.069]).
+
 ### Planning with fitted γ and bound (2026-10-28)
 
 Every comparison above gave the simulated people γ 0.9 and `BOUND` 1.5, the values
@@ -1780,14 +2031,14 @@ measures γ ("Feedback switched in blocks"). Two changes let a controller have b
 **Design** (`python -m experiments.feedback_blocks`). 128 people from a seeded Latin
 hypercube over the five-parameter recovery's ranges, each playing the app's task for 300
 ticks under three controllers, paired on seed:
-- **current**: `InfoController` as the app runs it;
+- **current**: `InfoController` as the app ran it until 2026-10-29;
 - **blocks**: `BlockInfoController` over the same 96 settings, so a hidden block's redo
   prompts ask nothing;
 - **blocks_end**: the same, with the six hidden redo-prompt settings replaced by
   end-of-set ones.
 
-The simulated person sees the score at the end of a hidden set, which the app does not show
-yet. α 0.05; `ACHIEVEMENT_SCALE = 4`, continuing bootstrap, `T_DUR = 7.0`. All five
+The simulated person sees the score at the end of a hidden set, as a person in the app has
+since 2026-10-28. α 0.05; `ACHIEVEMENT_SCALE = 4`, continuing bootstrap, `T_DUR = 7.0`. All five
 parameters are fitted by maximum likelihood at 100, 200 and 300 ticks. Claims fixed before
 the run, paired at 300 ticks:
 - **E1**: squared error in `k`, blocks_end − blocks, below zero beyond 2 SE;
@@ -1871,6 +2122,109 @@ not. Claims fixed before the run:
   countdown prompts that timed out was 3% (λ 0.4 to 0.55), 13%, 23% and 37% (λ 0.85 to 1.0).
   The share that ended in a redo was 27%, 23%, 12% and 12%. A cautious person under a
   countdown corrects fewer misses, which in the simulator is how ability grows.
+
+### Every parameter, every setting (2026-10-29)
+
+*`python -m experiments.controller_all`*
+
+`FullInfoController` ("Planning with fitted γ and bound") showed feedback before 98% of
+start decisions. The redo prompts it favours need feedback on, and it had no countdown to
+choose. `AllInfoController` (`experiments/controller_all.py`) plans with all six fitted
+parameters and chooses feedback, where redos are offered and the countdown by the same
+score, with nothing on a schedule.
+
+<details>
+<summary>How <code>AllInfoController</code> works</summary>
+
+- **Parameters.** `f`, `k`, γ, `BOUND`, `T0` and λ, fitted together by MAP with the
+  closed-form likelihood, drawn from the Laplace posterior for rollouts, and all six scored.
+  λ's prior is 0.7 ± 0.2; the other five keep `FullInfoController`'s.
+- **132 settings.** `InfoController`'s 84 scheduled-review settings, and redo prompts at
+  each of the 6 targets, either mid-set with feedback shown or at the end of the set with
+  it hidden. Each redo setting is untimed or has a 2, 3 or 5 s countdown
+  (`Environment.countdown`).
+- **Score.** The rise in log det of the information about all six parameters (D-optimal).
+  A decision under a countdown is read at bound λ · `BOUND` and its own deadline, so it
+  informs λ.
+- The draws, the 25-tick rollouts, the safety floor and the schedule are
+  `FullInfoController`'s. Unlike `AppController` ("The app's controller") it has no set
+  length, score display or "repeats", and an end-of-set redo's outcome is not shown.
+
+</details>
+
+Setup:
+- The 128 people and seeds of "Planning with fitted γ and bound", each also given a λ drawn
+  uniformly from 0.4 to 1.0. Each plays the app's task for 300 ticks under
+  `AllInfoController`.
+- The comparison arms are that result's saved runs of the same people on the same seeds,
+  under `InfoController` and `FullInfoController`. Neither offers a countdown, so λ plays
+  no part in them. Two of those runs were re-run with today's code and matched.
+- This arm's data are fitted at 100, 200 and 300 ticks, all six parameters by maximum
+  likelihood.
+- The simulated person sees an end-of-set score when feedback is hidden.
+- α 0.05; `ACHIEVEMENT_SCALE = 4`, continuing bootstrap, `T_DUR = 7.0`.
+
+Claims fixed before the run, paired at 300 ticks against `InfoController`:
+- **A1**: squared error in γ is below zero beyond 2 SE;
+- **A2**: squared error in `k` is not above zero beyond 2 SE;
+- **A3**: P(start) is not below zero beyond 2 SE.
+
+A second arm, Ds, was added after A1 to A3 were read. `DsInfoController` is
+`AllInfoController` scored on `f`, `k` and γ only (Ds-optimal): it still fits, draws and
+rolls out all six parameters, but scores a setting by the rise in log det of the Schur
+complement of the information about `(f, k, γ)`, so measuring `BOUND`, `T0` or λ earns
+nothing for its own sake. Same people, seeds and fits. Claims fixed before its run, paired
+at 300 ticks:
+- **D1**: squared error in `k`, Ds − all six, is below zero beyond 2 SE;
+- **D2**: squared error in γ, Ds − `InfoController`, is below zero beyond 2 SE;
+- **D3**: P(start), Ds − `InfoController`, is not below zero beyond 2 SE.
+
+| RMSE at 100 / 200 / 300 ticks | `InfoController` | `FullInfoController` | `AllInfoController` | `DsInfoController` |
+|---|---|---|---|---|
+| `f` | 0.402 / 0.213 / 0.214 | 0.312 / 0.201 / 0.202 | 0.342 / 0.240 / 0.183 | 0.233 / 0.188 / 0.172 |
+| `k` | 0.468 / 0.291 / 0.259 | 0.353 / 0.341 / 0.299 | 0.525 / 0.396 / 0.308 | 0.450 / 0.368 / 0.293 |
+| γ | 0.142 / 0.120 / 0.115 | 0.125 / 0.112 / 0.118 | 0.119 / 0.107 / 0.095 | 0.133 / 0.113 / 0.099 |
+| `BOUND` | 0.230 / 0.160 / 0.154 | 0.199 / 0.157 / 0.131 | 0.179 / 0.205 / 0.201 | 0.192 / 0.156 / 0.123 |
+| `T0` (s) | 0.123 / 0.107 / 0.111 | 0.128 / 0.129 / 0.109 | 0.102 / 0.090 / 0.081 | 0.135 / 0.109 / 0.099 |
+| λ | | | 0.123 / 0.114 / 0.085 | 0.377 / 0.328 / 0.294 |
+
+- **A1 does not hold.** γ's RMSE fell from 0.115 to 0.095, but the paired difference in
+  squared error, −0.0034 ± 0.0022, is 1.5 SE.
+- **A2 and A3 hold**, A2 only by its margin: squared error in `k` was +0.0315 ± 0.0235
+  higher, and P(start) changed by −0.007 ± 0.015.
+- **It hides feedback.** Feedback was shown before 14% of start decisions, against 99%
+  under `InfoController` and 98% under `FullInfoController`. It hid it more for people
+  with a high γ: shown before 24% of starts at γ 0.6 to 0.7, and 5% at 0.9 to 0.97. Of a
+  person's 171 redo decisions, 165 were at the end of the set and 115 under a countdown
+  (76 at 5 s, 27 at 3 s, 12 at 2 s).
+- **λ is measured** from those: r 0.90 and RMSE 0.085 over the 123 people with a fit (the
+  true λ has SD 0.18), and r 0.95 and RMSE 0.059 for the 108 with 20 or more timed redos.
+- **Not every parameter gains.** Against `InfoController`, `T0` was measured better
+  (−0.0046 ± 0.0024, 1.9 SE) and `f` a little (−0.012 ± 0.013). `k` (above) and `BOUND`
+  (+0.018 ± 0.014) were worse, neither beyond 2 SE. Two likely reasons, both untested. The
+  score spreads its information over six parameters, so `k` gets a smaller share. And a
+  timed redo measures λ · `BOUND`, so λ and the bound trade off.
+- **Engagement held against `InfoController`, not against `FullInfoController`.** Against
+  `InfoController`: time away +1.2 ± 1.0 points, start decisions −3.5 ± 2.9, total reward
+  +17.8 ± 3.4. Against `FullInfoController`: 16.5 ± 3.4 fewer start decisions and 5.5 ± 1.1
+  points more time away.
+
+The Ds arm:
+- **D1 and D2 do not hold; D3 holds.** Against all six, `k` changed by −0.011 ± 0.018. Against
+  `InfoController`, γ by −0.0036 ± 0.0022 (1.6 SE) and P(start) by −0.010 ± 0.014.
+- **So spreading the score over six parameters is not what cost `k`.** `k`'s RMSE was 0.293,
+  still above `InfoController`'s 0.259, though no `k` difference between any two arms here
+  reaches 2 SE. Every controller that plans with fitted γ and bound measured `k` a little
+  worse than `InfoController`, with feedback shown (`FullInfoController`) or hidden.
+- **It dropped most countdowns** (17 timed redos per person, against 115 under all six), so
+  λ was measured only where it had them: RMSE 0.044 and r 0.97 for the 47 people with 20
+  or more, 0.294 over all 121 fitted. `BOUND` was measured better than under all six
+  (−0.017 ± 0.011) and is the best of the four arms (0.123).
+- **It still hides feedback**, before 84% of start decisions (shown before 22% at γ 0.6 to
+  0.7, 10% at 0.9 to 0.97), with 153 of 159 redos at the end of the set.
+- **It cost some engagement.** Against `InfoController`: time away +3.2 ± 1.4 points and
+  9.5 ± 4.2 fewer start decisions (both 2.3 SE, no claim fixed), total reward +5.3 ± 3.8.
+  Against all six: total reward −12.5 ± 3.2.
 
 ---
 
@@ -2180,8 +2534,10 @@ probed runs).
   γ at 0.9, and so do most results here, the controller comparison included. `f` is also
   identified only up to `ACHIEVEMENT_SCALE`, which multiplies value. State γ (or that it was
   fitted), the scale and the bootstrap whenever an `f` value is reported.
-- **The reward is assumed in every fit the app runs.** Right answers are worth `1 − p`; a
-  person who values the fraction right instead gets `f` 46 to 54% too low even with γ
+- **The reward is assumed in every fit the app runs.** Right answers are worth `1 − p`
+  with the score shown and the fraction right with it hidden (decided on 2026-10-29, not
+  tested: that what is shown is what pays). A person who values the fraction right with
+  the score shown gets `f` 46 to 54% too low even with γ
   fitted ("Fitting the discount factor", robustness). Comparing the two by likelihood picks
   the right one for 63 of 64 simulated people and removes the bias ("Measuring the learning
   rate and the reward"), but only these two reward forms have been compared.
@@ -2248,17 +2604,19 @@ probed runs).
 
 **The app and the human data**
 
-- **The app shows no end-of-set score.** With feedback hidden, the model pays the set's
-  reward at an end-of-set score, but a hidden set never tells the person how they did.
-  Every simulated result assumes the score is seen. The app needs the screen before human
-  data are collected, or the model's account of hidden feedback does not describe them.
+- **The app's controller is not measured.** `AppController` chooses among 1104 settings,
+  and nothing shows yet that it measures `f` and `k` as well as `InfoController` did or
+  keeps people engaged as well ("The app's controller").
+- **λ rests on its prior when countdowns are rare.** With few timed prompts the fit keeps
+  λ near 0.7, so those prompts are read at a bound that may not be the person's. How much
+  that moves `f` and `k` has not been measured.
 - **The deadline is set from the human decision times seen so far.** Anyone slower than
   `T_DUR = 7.0` is censored again; `python -m temporal audit` flags a share past the
   deadline above 2%.
 - **Interface rules with no simulator counterpart**: retiring questions, never repeating one
-  within a set, and treating a quick fix as a typo. `RETIRE_AFTER = 3` and
-  `SLIP_SECONDS = 2` are judgment calls; retirement stops a question someone might have got
-  right on a later showing.
+  within a set, and treating a quick fix as a typo (never after the end-of-set summary).
+  `RETIRE_AFTER = 3` and `SLIP_SECONDS = 2` are judgment calls; retirement stops a
+  question someone might have got right on a later showing.
 
 **Numerical shortcuts**
 
@@ -2304,19 +2662,30 @@ probed runs).
 
 ### Then: close the loop
 
-8. **Improve the controller.** Since 2026-10-11 the app runs `InfoController`, which measures
-   `k` far better than reward planning (RMSE 0.156 against 0.508 over 300 ticks, though the
-   paired test fixed in advance fell short of 2 SE) at no detectable cost in reward, and
-   `f` no better ("Measuring costs no detectable reward"). What remains:
-   - **Re-measure the reward controller under the current model.** Its only evaluation
-     against the fixed default, random switching and the best fixed setting is the V2 8-seed
-     table in `RETIRED.md`, and two of its five people cannot be rebuilt. Open questions
+8. **Improve the controller.** From 2026-10-11 to 2026-10-29 the app ran `InfoController`,
+   and since then `AppController`, the same score over every setting the app has, which is
+   not measured yet ("The app's controller"). `InfoController` measures `k` far better
+   than reward planning (RMSE 0.156 against 0.508 over 300 ticks, though the paired test
+   fixed in advance fell short of 2 SE) at no detectable cost in reward, and `f` no better
+   ("Measuring costs no detectable reward"). What remains:
+   - **Re-measure the reward controller under the current model.** On 2026-10-29 it was
+     run against `InfoController`, the fixed default and random choice on the 128 hypercube
+     people ("The app's InfoController and reward planning, on the same people"). Its only
+     evaluation against the best fixed setting is still the V2 8-seed table in
+     `RETIRED.md`, and two of its five people cannot be rebuilt. Open questions
      from it: the reluctant, effort-averse person (too few sets to decide), the gap to the
      best fixed setting given true parameters, and whether exploration probes cost reward.
    - **Which objective.** Total reward and engagement disagree on where to aim ("Which
-     difficulty and whether to show feedback"), and the V1 reason for preferring reward no
-     longer holds. Decide whether the reward controller should maximize engagement, reward,
-     or engagement with a floor on challenge.
+     difficulty and whether to show feedback"). An engagement maximizer was built on
+     2026-10-29 ("Four controllers"): it kept people in the task for 58% of ticks against
+     41% at the fixed default, with short, easy sets. Information planning kept them there
+     for 28%. What is left: what the app's controller should trade between the two, and
+     whether engagement with a floor on challenge serves a learner better.
+   - **γ needs start decisions.** Under every controller γ is measured to about 0.01 to
+     0.05 for people who give 100 or more start decisions and not at all below 50 ("Four
+     controllers"). Information planning, which measures γ best per decision, gives the
+     fewest. The next thing to try is information planning with a floor on time in the
+     task (its safety floor is only on sets started in a rollout), and a longer run.
    - **Feedback.** Under the current model, showing feedback raised engagement at every
      target but 20% for f 0.8, k 0.8, and never lost on reward beyond 2 SE. Across the grid
      it lowered P(start) beyond 2 SE in one cell of 96 (f 0.6, k 1.0 at 20%, 3.2 SE). Run
@@ -2328,19 +2697,32 @@ probed runs).
    - **The skipped-questions lever is unproven.** Nothing measured shows when returning
      skipped questions helps. A person whose ability grows from corrections would be the
      test.
-   - `stage_amt` is not a lever yet, and showing the count or the score has no model
-     channel.
+   - **The stage count has no model channel.** Set length and the score display became
+     levers on 2026-10-29 ("The app's controller"); whether showing the count matters, and
+     how, waits on the literature.
+   - **Measure `AppController`**: against `InfoController`, paired on person and seed, for
+     `f` and `k` error, λ, and P(start), with recovery of the new levers first.
    - **Plan with fitted γ and bound.** Built and compared on 2026-10-28 ("Planning with
      fitted γ and bound"): it kept people engaged better but did not measure `f`, `k` or γ
-     better at 300 ticks. What is left: score only the information about `f` and `k`, with
-     γ, the bound and `T0` as nuisance parameters (Ds-optimal design, the log det of their
-     marginal).
+     better at 300 ticks. With all six parameters and the countdown and feedback as
+     settings ("Every parameter, every setting", 2026-10-29) it hid feedback before 86% of
+     start decisions and measured λ, but γ gained short of 2 SE and `k` and the bound lost
+     a little. Scored on `f`, `k` and γ only (Ds-optimal, same section) it dropped most
+     countdowns, measured the bound better and `k` no better, and cost some engagement.
+     With 384 settings, set length among them, the Ds-optimal planner measured `k` better
+     than `InfoController` over the same settings, just beyond 2 SE (squared error
+     −0.069 ± 0.034; RMSE 0.201 against 0.336, "Four controllers" and the section after
+     it; no claim fixed), and `f` and γ no worse. Over these settings, then, planning with
+     fitted γ and bound did not cost `k`. Why the earlier comparisons leaned the other way
+     (never beyond 2 SE) is not settled: the two planners also differ in their score and
+     in comparing settings on the same seeds.
    - **Feedback in blocks.** Tried on 2026-10-28 ("Feedback in blocks, with redos mid-set or
      at the end of the set"): with redos moved to the end of the set it kept the redo
      decisions and cost no `k`, but did not measure γ better in 300 ticks, where most people
      reach one or two hidden blocks. What is left: blocks over a longer run (or shorter
-     blocks), and the end-of-set screen and its redo buttons in the app, which the result
-     depends on.
+     blocks). The app has had the end-of-set screen and its redo prompts since 2026-10-28.
+     Its controller, `AppController` since 2026-10-29, can choose end-of-set redos, but it
+     does not switch feedback on a block schedule.
 9. **Online re-estimation.** Parameters drift within a session with fatigue, mood and
    boredom, so the controller must track them rather than fit once.
 
@@ -2404,13 +2786,17 @@ machine with less memory per core. Most take minutes. The controller comparison 
 | Measuring costs no detectable reward and its paired tests; It found the redo prompts on its own; Over time; What measuring costs, block by block | `python -m experiments.controllers` | `results/controllers/` |
 | Intervals beside the controller comparison, and the five people's feedback intervals (no simulation) | `python -m experiments.intervals` | `results/intervals.txt` |
 | Planning with fitted γ and bound | `python -m experiments.controller_full` | `results/controller_full/runs_*.csv` |
+| Four controllers, all five parameters fitted | `python -m experiments.controller_full --arms fixed` and `--arms random_return,engage,info_fkg` (split by `--people` and `--tag`) | `results/controller_full/runs_*_base.csv` (fixed), `runs_*four*.csv` |
+| The app's InfoController and reward planning, on the same people | `python -m experiments.controller_full --arms info_end,random_end,reward_end` | `results/controller_full/runs_*_end*.csv` |
 | Feedback in blocks, with redos mid-set or at the end of the set | `python -m experiments.feedback_blocks` (split by `--people` and `--tag`) | `results/feedback_blocks/runs_*.csv` |
 | A countdown on the redo prompt | `python -m experiments.redo_pressure` (split by `--people` and `--tag`) | `results/redo_pressure/runs_*.csv` |
+| Every parameter, every setting | `python -m experiments.controller_all` (split by `--people` and `--tag`; reads `results/controller_full/` for the other two arms) | `results/controller_all/runs_*.csv` |
 | Non-decision time (the T0 table) | `python -m temporal recovery --mode t0 --reps 3 --out results/pipelines` | `results/pipelines/t0.csv` |
 | The person may not share the model's constants | `python -m experiments.misspecification` | `results/misspecification/` |
 | How value and cost together decide what can be measured (the precision table) | `python -m experiments.precision` | `results/precision/` |
 | The same with γ, the bound and `T0` free | `python -m experiments.precision_full` | `results/precision_full/` |
 | How often the error hits `DELTA_CLIP`, the start node's effort cost, and what the continuing bootstrap does to value | `python -m experiments.value_checks` | `results/value_checks/` |
+| The app's controller: the closed-form fit against pyddm's, λ recovery, plan time | `python -m experiments.app_checks` | `results/app_checks/` |
 
 The `temporal recovery` sweeps print their tables as they finish. They have no `--replot`,
 but their CSVs are saved. To re-run everything, run every command in the table.
@@ -2434,12 +2820,13 @@ paper's conditions in short, and each experiment's docstring gives them in full.
 | 5 (`fig5`) | bias once γ is fitted | 3 people × 5 seeds (γ held, γ fitted), 3 people × 2 seeds (one other constant wrong), the 100 people of Figure 4 | `misspecification`, `gamma_profile`, `gamma_robustness`, `recovery_lhc` |
 | 6 (`fig6`) | what each shortcut in the fit costs | (a) as `fig4`; (b) f = k = 0.8, true `T0` 0 to 0.5 s × 3 seeds, 1200 start decisions; (c) 4 people × 3 seeds, 300 start decisions; (d) the 100 people of Figure 4 | `recovery_sweep`, `pipelines`, `precision_full` |
 | 7 (`fig7`) | difficulty and feedback | 5 people, each setting held for 300 ticks, 16 seeds; (c) γ 0.5 to 0.99, 32 seeds | `task_choice`, `gamma_feedback` |
-| 8 (`fig8`) | how well each controller measures k | 32 people (4 × 4 grid × 2 seeds), 300 ticks | `controllers` |
+| 8 (`fig8lhc`) | four controllers, all five parameters fitted | 128 people from a Latin hypercube, 300 ticks under each: the fixed default, a random setting at each return, the engagement maximizer and information planning on f, k and γ, the last three over the same 384 settings | `controller_full` |
+| `fig8` | how well each controller measures k when every person has γ 0.9 and bound 1.5 | 32 people (4 × 4 grid × 2 seeds), 300 ticks, f and k fitted | `controllers` |
 | 9 (`fig9`) | planning with all five parameters | 128 people from a Latin hypercube, 300 ticks under each controller | `controller_full` |
 | S2 (`figS2`) | timed-out trials kept or dropped | as `fig4` | `recovery_sweep` |
 | S3 (`figS3`) | the fit factorial | 32 people (4 × 4 grid × 2 seeds), 300 start decisions, true `T0` 0.3 s | `fit_factorial` |
 | S4 (`figS4`) | reward by difficulty, one-person feedback test | f = k = 0.8, 96 seeds; the 5 people of Figure 7 | `task_choice` |
-| S5 (`figS5`) | controllers over time | as Figure 8 | `controllers` |
+| S5 (`figS5`) | controllers over time | as `fig8` | `controllers` |
 | S6 (`figS6`) | feedback by γ | 5 people, γ 0.5 to 0.99, 32 seeds | `gamma_feedback` |
 | S7 (`figS7`) | bias with γ held at 0.9 | 3 people × 5 seeds, with and without redo decisions | `misspecification`, `gamma_profile` |
 | S8 (`figS8`) | the five-parameter fit from less data | the 100 people of Figure 4, cut at 50 to 300 start decisions | `lhc_size` |
@@ -2555,18 +2942,22 @@ result files it wrote back into the checkout. Logs and process ids are kept in
 temporal/
   cli.py            entry point (python -m temporal): single runs, recovery sweeps, audit
   model/            the person, as the environment models them
-    params.py         UserParams (f, k, discount, learning rate, patience, T0) and ModelState
+    params.py         UserParams (f, k, discount, learning rate, patience, T0, λ) and ModelState
     accumulator.py    the drift-diffusion process behind start and redo decisions; cached solves and draws
     conditions.py     the (value, cost) each decision node feeds it
     value.py          TD value of a set, and when a slot's reward lands
     competence.py     chance of a right answer, and how it grows
     persistence.py    giving up on a question: quit drift, patience, closed-form likelihood
+    pressure.py       the redo prompt under a countdown: the person's bound drops to λ · BOUND
     questions.py      question types, their priors, and per-person Elo ratings
-    simulation.py     the simulated learner: sets, review, redo prompts, start decisions
-  inference.py      sample construction, censoring, the two-parameter fit, sanity checks
+    simulation.py     the simulated learner: sets, review, redo prompts mid-set or at the end
+                      of the set, countdowns, start decisions
+  inference.py      sample construction, censoring, the two-parameter fit, the app's closed-form
+                    fit with λ, sanity checks
   fastlik.py        the accumulator's likelihood in closed form, checked against pyddm
   recovery.py       data generation and recovery pipelines, including persistence and patience
-  controller.py     Controller (plans for reward) and InfoController (plans to measure f and k)
+  controller.py     Controller (plans for reward), InfoController (plans to measure f and k)
+                    and AppController (the app's: InfoController's score over 1104 settings)
   plots.py          recovery figures
   app/              the playable task
     session.py        the rules of a session, shared by both frontends
@@ -2580,7 +2971,9 @@ paper/              the paper's figures, drawn from results/ (python -m paper) i
 taskboard/          optional browser dashboard for starting, watching and splitting runs (python -m taskboard)
   hosts.example.json  the computers it can use; copy to hosts.json (gitignored) to add more
 tests/              seeded regression tests (golden.json), the session rule (test_sessions.py),
-                    the closed-form likelihood against pyddm (test_fastlik.py), and the
+                    the closed-form likelihood against pyddm (test_fastlik.py), end-of-set
+                    redos (test_end_redos.py), the countdown (test_pressure.py), the app's
+                    controller, end-of-set screen and settings (test_app_*.py), and the
                     taskboard's log and catalog reading (test_taskboard.py)
 RETIRED.md          results from earlier model versions, and ones later measurements replaced
 Dockerfile, fly.toml   hosting the web app; data in a volume at /data

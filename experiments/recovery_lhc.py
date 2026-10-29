@@ -230,9 +230,13 @@ def summarize(df):
               f"{np.sqrt(np.mean(e_full ** 2)):.3f}), bias {e_app.mean():+.3f} ± {se(e_app):.3f}")
 
 
+# "0-49", or ranges and single people joined by commas: "60,67,70-71".
 def span(s):
-    lo, hi = (int(x) for x in s.split("-"))
-    return list(range(lo, hi + 1))
+    out = []
+    for part in s.split(","):
+        lo, _, hi = part.partition("-")
+        out += range(int(lo), int(hi or lo) + 1)
+    return out
 
 
 if __name__ == "__main__":

@@ -7,11 +7,17 @@
    },
    {
     "controller": false,
+    "countdown": 0.0,
+    "end_redos": false,
     "feedback": true,
+    "forced": "continue",
     "node": "set_start",
+    "redo_prompts": true,
     "review_rate": 0.25,
     "session": 1,
     "set": 1,
+    "show_score": true,
+    "stages": 4,
     "target": 0.75
    },
    {
@@ -218,11 +224,17 @@
    },
    {
     "controller": false,
+    "countdown": 0.0,
+    "end_redos": false,
     "feedback": true,
+    "forced": "continue",
     "node": "set_start",
+    "redo_prompts": true,
     "review_rate": 0.25,
     "session": 1,
     "set": 2,
+    "show_score": true,
+    "stages": 4,
     "target": 0.75
    },
    {
@@ -503,11 +515,17 @@
    },
    {
     "controller": false,
+    "countdown": 0.0,
+    "end_redos": false,
     "feedback": true,
+    "forced": "continue",
     "node": "set_start",
+    "redo_prompts": true,
     "review_rate": 0.25,
     "session": 1,
     "set": 3,
+    "show_score": true,
+    "stages": 4,
     "target": 0.75
    },
    {
@@ -677,11 +695,17 @@
    },
    {
     "controller": false,
+    "countdown": 0.0,
+    "end_redos": false,
     "feedback": true,
+    "forced": "continue",
     "node": "set_start",
+    "redo_prompts": true,
     "review_rate": 0.25,
     "session": 1,
     "set": 4,
+    "show_score": true,
+    "stages": 4,
     "target": 0.75
    },
    {

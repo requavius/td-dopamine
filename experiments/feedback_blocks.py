@@ -25,9 +25,9 @@ Three arms, paired on person and seed:
 the app's task (question types with Elo ratings, skips on, cold-start cost 0.6) for 300
 ticks under each arm. α 0.05 for person, shadows and controllers; SIGMA 0.7,
 ACHIEVEMENT_SCALE 4, continuing bootstrap, T_DUR 7.0. The simulated person sees the score
-at the end of a hidden set, which the app does not show yet. At 100, 200 and 300 ticks the
-data recorded so far are fitted the same way in every arm: f, k, γ, BOUND and T0 by maximum
-likelihood (recovery_lhc.Person.fit), value at any γ from shadow learners.
+at the end of a hidden set, as the app shows it since 2026-10-28. At 100, 200 and 300
+ticks the data recorded so far are fitted the same way in every arm: f, k, γ, BOUND and T0
+by maximum likelihood (recovery_lhc.Person.fit), value at any γ from shadow learners.
 
 Claims, fixed before any run (2026-10-28), paired on person, at 300 ticks:
     E1  squared error in k, blocks_end − blocks, is below zero beyond 2 SE

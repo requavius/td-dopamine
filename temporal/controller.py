@@ -15,8 +15,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from .inference import fit, passages_to_frame
-from .model.accumulator import DT, snap_value, solution
+from . import fastlik
+from .inference import LAM_PRIOR, decision_arrays, fit, fit_closed_form, passages_to_frame
+from .model.accumulator import BOUND, DT, snap_value, solution
 from .model.params import PATIENCE, UserParams
 from .model.persistence import attempts_to_frame, fit_patience
 from .model.pressure import REDO_DEADLINE
@@ -34,10 +35,17 @@ class Environment:
     # With feedback hidden, ask on the end-of-set screen instead of not at all.
     end_redos: bool = False
     pressure: bool = False  # a countdown on every redo prompt (model/pressure.py)
+    countdown: float = REDO_DEADLINE  # its length in seconds, when there is one
+    stage_amt: int = 4       # questions per set
+    show_score: bool = True  # hidden, only right and wrong are seen: the reward is accuracy
+    forced: bool = False     # with redo prompts off, every seen miss is redone, undecided
+    end_feedback: bool = False  # an end-of-set redo's outcome is shown, and lands
 
     @property
     def review_mode(self):
-        return "choice" if self.redo_prompts else "scheduled"
+        if self.redo_prompts:
+            return "choice"
+        return "forced" if self.forced else "scheduled"
 
     def __str__(self):
         return (f"aim {self.target_p:.0%} right, review {self.review_rate:.2f}, "
@@ -45,7 +53,15 @@ class Environment:
                 f"skipped {'come back' if self.return_skipped else 'dropped'}"
                 + (", redo prompts" if self.redo_prompts else "")
                 + (" at the end of the set" if self.end_redos else "")
-                + (f" with a {REDO_DEADLINE:g} s countdown" if self.pressure else ""))
+                + (f" with a {self.countdown:g} s countdown" if self.pressure else "")
+                + (", misses repeated" if self.forced else "")
+                + (f", {self.stage_amt} per set" if self.stage_amt != 4 else "")
+                + ("" if self.show_score else ", score hidden")
+                + (", their outcomes shown" if self.end_feedback else ""))
+
+    @property
+    def redo_deadline(self):
+        return self.countdown if self.pressure else None
 
 
 TARGETS = (0.9, 0.75, 0.6, 0.45, 0.3, 0.2)
@@ -58,8 +74,9 @@ SCHEDULED = tuple(Environment(t, r, fb, rs)
 # Misses come back only when the person asks: the redo decision, where cost varies most.
 REDO = tuple(Environment(t, 0.0, fb, False, True) for t in TARGETS for fb in FEEDBACK_LEVELS)
 CANDIDATES = SCHEDULED + REDO
-# Feedback hidden, and redos offered on the end-of-set screen. Not among CANDIDATES: the
-# app has no end-of-set screen yet (experiments/feedback_blocks.py uses them).
+# Feedback hidden, and redos offered on the end-of-set screen. The app has that screen,
+# but these are not among CANDIDATES: only experiments/feedback_blocks.py has tried them,
+# with feedback switched in blocks, not as choices for the app's controller.
 REDO_END = tuple(Environment(t, 0.0, False, False, True, True) for t in TARGETS)
 
 # Estimation guardrails: the estimate starts at a prior and earns weight with data.
@@ -80,6 +97,7 @@ class Estimate:
     note: str = ""
     patience: float = PATIENCE  # seconds per unit of model time while on a question
     t0: float = 0.0             # non-decision time; it shifts RTs, so planning ignores it
+    lam: float = LAM_PRIOR[0]   # share of BOUND kept under a redo countdown (AppController)
 
 
 def decided_rows(state):
@@ -139,8 +157,10 @@ def fork(state, params, env):
     sim = Simulation(params, review_mode=env.review_mode, review_rate=env.review_rate,
                      target_p=env.target_p, feedback=env.feedback,
                      skips=True, return_skipped=env.return_skipped, end_redos=env.end_redos,
-                     redo_deadline=REDO_DEADLINE if env.pressure else None)
+                     redo_deadline=env.redo_deadline, show_score=env.show_score,
+                     end_feedback=env.end_feedback)
     sim.state = st
+    st.stage_amt = env.stage_amt
     return sim
 
 
@@ -149,7 +169,9 @@ def apply(sim, env):
     sim.target_p, sim.review_rate = env.target_p, env.review_rate
     sim.feedback, sim.return_skipped = env.feedback, env.return_skipped
     sim.review_mode, sim.end_redos = env.review_mode, env.end_redos
-    sim.redo_deadline = REDO_DEADLINE if env.pressure else None
+    sim.redo_deadline = env.redo_deadline
+    sim.show_score, sim.end_feedback = env.show_score, env.end_feedback
+    sim.state.stage_amt = env.stage_amt  # from the next set: apply runs between sets
 
 
 # Total reward earned over `horizon` ticks in `env`. Time away counts against it.
@@ -403,6 +425,201 @@ class InfoController(Controller):
         return update
 
 
+# --- The app's controller ----------------------------------------------------------------
+# InfoController's score over every setting of the app whose effect the model describes,
+# with redo prompts under a countdown read at their own bound and deadline. Showing the
+# stage count is not among them: the model has no account of it yet.
+
+COUNTDOWNS = (2.0, 3.0, 5.0)  # seconds on a timed redo prompt
+STAGE_LEVELS = (2, 4, 6, 8)   # questions per set
+LAM_DRAWS = (0.2, 1.2)        # range a drawn λ is clipped to
+LAM_STEP = 0.05               # and snapped to, so pressure.py's draw tables are reused
+
+
+# The settings at one target, set length and score display: InfoController's scheduled
+# review ones; redo prompts mid-set with feedback shown or after the score with it hidden
+# (and each redo's outcome then shown, as the app does), each untimed or under a
+# countdown; and every seen miss redone with no prompt.
+def _app_settings(t, n, score):
+    common = dict(stage_amt=n, show_score=score)
+    scheduled = [Environment(t, r, fb, rs, **common) for r in REVIEW_LEVELS
+                 for fb in FEEDBACK_LEVELS for rs in SKIPPED_LEVELS if r > 0 or not rs]
+    redo = [Environment(t, 0.0, mid, False, True, not mid, c is not None,
+                        REDO_DEADLINE if c is None else c, end_feedback=not mid, **common)
+            for mid in (True, False) for c in (None, *COUNTDOWNS)]
+    forced = [Environment(t, 0.0, True, False, forced=True, **common)]
+    return scheduled + redo + forced
+
+
+# 6 targets x 4 set lengths x score shown or hidden x 23 settings each = 1104.
+APP_CANDIDATES = tuple(e for t in TARGETS for n in STAGE_LEVELS for score in (True, False)
+                       for e in _app_settings(t, n, score))
+
+
+# (f, k, T0, λ) for planning: `estimate`, fitted in closed form so that redo prompts under
+# a countdown are read at bound λ·BOUND and their own deadline (inference.fit_closed_form).
+def estimate_closed_form(state, previous=None):
+    passages = state.initiation_passages + state.first_passage
+    go, *_, deadline = decision_arrays(passages)
+    n = int((go >= 0).sum())
+    timed = int((~np.isnan(deadline)).sum())
+    if n < MIN_ROWS:
+        est = Estimate(*PRIOR, rows=n, note=f"prior only ({n}/{MIN_ROWS} rows)")
+    else:
+        raw = fit_closed_form(passages)
+        f_hat, k_hat, t0_hat, lam_hat = raw
+        lo, hi = F_BOUNDS
+        if min(f_hat, k_hat) <= lo + 0.01 or max(f_hat, k_hat) >= hi - 0.01: # hit the search bound
+            base = previous or Estimate(*PRIOR)
+            est = Estimate(base.f, base.k, rows=n, raw=raw, t0=t0_hat, lam=base.lam,
+                           note="f/k fit hit a bound, kept previous")
+        else:
+            w = n / (n + SHRINK_ROWS) # weight on the fit against the prior
+            est = Estimate(w * f_hat + (1 - w) * PRIOR[0], w * k_hat + (1 - w) * PRIOR[1],
+                           rows=n, raw=raw, t0=t0_hat, lam=lam_hat,
+                           note=f"{w:.0%} fit / {1 - w:.0%} prior; T0 {t0_hat:.2f}s; "
+                                f"λ {lam_hat:.2f} from {timed} timed")
+    est.patience, note = estimate_patience(state, est.f, est.k)
+    est.note += "; " + note
+    return est
+
+
+# Fisher information of one decision under a countdown about its drift μ and its bound b,
+# at bound `bound` and deadline `t_dur`, on MU_GRID: (I_μμ, I_μb, I_bb), in closed form.
+def countdown_info_table(bound, t_dur, h=0.01):
+    def probs(mu, b):
+        up, lo, und = fastlik.outcome_probs(mu, b, t_dur=t_dur)
+        return np.concatenate([up, lo, und[:, None]], axis=1)
+    mid = probs(MU_GRID, bound)
+    d_mu = (probs(MU_GRID + h, bound) - probs(MU_GRID - h, bound)) / (2 * h)
+    d_b = (probs(MU_GRID, bound + h) - probs(MU_GRID, bound - h)) / (2 * h)
+    w = 1.0 / np.maximum(mid, 1e-300)
+    return tuple(np.sum(x * y * w, axis=1) for x, y in ((d_mu, d_mu), (d_mu, d_b), (d_b, d_b)))
+
+
+# log det of the information about (f, k) with λ a nuisance: the Schur complement.
+def fk_logdet(m):
+    return logdet(m[:2, :2] - np.outer(m[:2, 2], m[:2, 2]) / m[2, 2])
+
+
+class AppController(InfoController):
+    """The controller the app runs: InfoController over APP_CANDIDATES, countdown-aware.
+
+    - The estimate is fitted in closed form, with λ (`estimate_closed_form`).
+    - A setting's score is the rise in log det of the information about (f, k) with λ a
+      nuisance, which is InfoController's score when no decision is timed. A timed
+      decision informs (μ, b) at its own deadline, with b = λ·BOUND.
+    - (f, k, λ) are drawn from N(estimate, (prior + data information)^-1), as
+      InfoController draws (f, k).
+    - Planning screens every setting on `screen_draws` of the draws, then scores the
+      `finalists` best on all of them, within the safety floor each time. Every setting
+      is rolled out on the same seeds, so settings are compared on the same luck.
+    """
+
+    def __init__(self, candidates=APP_CANDIDATES, screen_draws=2, finalists=24, **kw):
+        super().__init__(candidates=candidates, **kw)
+        self.screen_draws = screen_draws
+        self.finalists = finalists
+        self.tables = {}
+
+    def _table(self, lam, t_dur):
+        key = (round(lam * BOUND, 4), float(t_dur))
+        if key not in self.tables:
+            self.tables[key] = countdown_info_table(*key)
+        return self.tables[key]
+
+    # Information about (f, k, λ) in a list of decision records, for one draw.
+    def information(self, passages, f, k, lam):
+        m = np.zeros((3, 3))
+        if not passages:
+            return m
+        v = np.array([p["value"] for p in passages], dtype=float)
+        c = np.array([p["cost"] for p in passages], dtype=float)
+        d = np.array([p.get("deadline") or np.nan for p in passages], dtype=float)
+        mu = f * v - k * c
+        i_mm = np.interp(mu, MU_GRID, i_mu_table())
+        i_mb, i_bb = np.zeros_like(mu), np.zeros_like(mu)
+        for t in np.unique(d[~np.isnan(d)]):
+            rows = d == t
+            mm, mb, bb = self._table(lam, t)
+            i_mm[rows] = np.interp(mu[rows], MU_GRID, mm)
+            i_mb[rows] = np.interp(mu[rows], MU_GRID, mb)
+            i_bb[rows] = np.interp(mu[rows], MU_GRID, bb)
+        # μ moves with (f, k, λ) as (v, -c, 0); a timed decision's bound as (0, 0, BOUND).
+        m[0, 0] = np.sum(i_mm * v * v)
+        m[0, 1] = m[1, 0] = -np.sum(i_mm * v * c)
+        m[1, 1] = np.sum(i_mm * c * c)
+        m[0, 2] = m[2, 0] = BOUND * np.sum(i_mb * v)
+        m[1, 2] = m[2, 1] = -BOUND * np.sum(i_mb * c)
+        m[2, 2] = BOUND ** 2 * np.sum(i_bb)
+        return m
+
+    def _plan(self, state, params):
+        rows = decided_rows(state)
+        if self.known is not None:
+            lam = self.known[2] if len(self.known) > 2 else LAM_PRIOR[0]
+            self.est = Estimate(*self.known[:2], rows=rows, lam=lam, note="known (test)")
+        elif self.est is None or rows - self.rows_at_fit >= self.refit_every:
+            self.est = estimate_closed_form(state, self.est)
+            self.rows_at_fit = rows
+        est = self.est
+        data = state.initiation_passages + state.first_passage
+        prior = np.diag([PRIOR_SD ** -2, PRIOR_SD ** -2, LAM_PRIOR[1] ** -2])
+        if self.known is not None:
+            draws = np.array([[est.f, est.k, est.lam]] * DRAWS)
+        else:
+            if rows >= MIN_ROWS and est.raw is not None:
+                mean = np.array([est.f, est.k, est.lam])
+                cov = np.linalg.inv(prior + self.information(data, *mean))
+            else:  # the fit is not used yet: the prior is all there is
+                mean, cov = np.array([*PRIOR, LAM_PRIOR[0]]), np.linalg.inv(prior)
+            draws = self.np_rng.multivariate_normal(mean, cov, size=DRAWS)
+            draws[:, :2] = np.clip(draws[:, :2], 0.05, 2.5)
+            draws[:, 2] = np.round(np.clip(draws[:, 2], *LAM_DRAWS) / LAM_STEP) * LAM_STEP
+        bases = [prior + self.information(data, *d) for d in draws]
+        seeds = [self.rng.randrange(2**31) for _ in draws]  # shared by every setting
+
+        # (score, sets started) of `env`, averaged over the draws numbered in `which`.
+        def evaluate(env, which):
+            gains, started = [], []
+            for j in which:
+                f, k, lam = draws[j]
+                model = UserParams(f=snap_value(f), k=snap_value(k), g=params.g, a=params.a,
+                                   patience=est.patience, pressure=float(lam))
+                sim = fork(state, model, env)
+                random.seed(seeds[j])
+                np.random.seed(seeds[j])
+                e0 = sim.state.episodes
+                for _ in range(self.info_horizon):
+                    sim.tick()
+                ps = sim.state.initiation_passages + sim.state.first_passage
+                gains.append(fk_logdet(bases[j] + self.information(ps, f, k, lam))
+                             - fk_logdet(bases[j]))
+                started.append(sim.state.episodes - e0)
+            return float(np.mean(gains)), float(np.mean(started))
+
+        # Settings above the safety floor, best first.
+        def ranked(results):
+            floor = self.safety * max(n for _, n in results.values())
+            return sorted((e for e in results if results[e][1] >= floor),
+                          key=lambda e: results[e][0], reverse=True)
+
+        screen = {env: evaluate(env, range(min(self.screen_draws, DRAWS)))
+                  for env in self.candidates}
+        final = {env: evaluate(env, range(DRAWS)) for env in ranked(screen)[:self.finalists]}
+        chosen = ranked(final)[0]
+
+        previous = self.env
+        self.env = chosen
+        self.last_plan = len(state.initiation_passages)
+        update = Update(len(state.initiation_passages), est, previous, chosen,
+                        f"information +{final[chosen][0]:.2f} over {DRAWS} draws, best of "
+                        f"{len(final)} finalists from {len(screen)} settings",
+                        {e: s for e, (s, _) in final.items()})
+        self.log.append(update)
+        return update
+
+
 # Entry point for a separate process (the app plans off the UI thread).
 def plan_in_worker(controller, state, params):
     update = controller.plan(state, params)
@@ -426,8 +643,10 @@ def run(params, controller=None, env=Environment(), n_decisions=400, seed=0,
                      review_mode=start.review_mode, target_p=start.target_p,
                      feedback=start.feedback, ratings=ratings, skips=skips,
                      return_skipped=start.return_skipped, end_redos=start.end_redos,
-                     redo_deadline=REDO_DEADLINE if start.pressure else None)
+                     redo_deadline=start.redo_deadline, show_score=start.show_score,
+                     end_feedback=start.end_feedback)
     st = sim.state
+    st.stage_amt = start.stage_amt
     truth = type_diffs if type_diffs is not None else synthetic_type_diffs(spread)
     st.type_diffs = np.array(truth, dtype=float) # hidden from the controller
     st.ability = ability

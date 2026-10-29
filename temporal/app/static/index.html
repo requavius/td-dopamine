@@ -32,8 +32,13 @@
   .problem { font-size: clamp(36px, 8vw, 56px); font-weight: 600; margin: 28px 0 24px;
              font-variant-numeric: tabular-nums; }
   .prompt { font-size: clamp(26px, 5vw, 36px); font-weight: 600; margin: 0 0 32px; }
-  .flash { font-size: clamp(36px, 8vw, 52px); font-weight: 600; }
+  .flash { font-size: clamp(36px, 8vw, 52px); font-weight: 600; white-space: pre-line; }
   .flash.correct { color: var(--good); } .flash.wrong { color: var(--bad); }
+  .summary { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 18px;
+             font-size: 18px; font-variant-numeric: tabular-nums; }
+  .summary .correct { color: var(--good); } .summary .incorrect { color: var(--bad); }
+  .summary .skipped { color: var(--muted); }
+  .total { font-size: 20px; font-weight: 600; margin-bottom: 22px; }
   input.answer { font: inherit; font-size: 32px; width: 200px; max-width: 100%; text-align: center;
                  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
                  background: var(--bg); color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -47,6 +52,8 @@
   kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line);
         border-radius: 4px; padding: 1px 5px; margin-right: 6px; opacity: .8; }
   .note { color: var(--muted); max-width: 32em; }
+  .countdown { color: var(--muted); font-size: 18px; margin-top: 22px;
+               font-variant-numeric: tabular-nums; }
 
   .status { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
             color: var(--muted); font-size: 14px; }
@@ -129,14 +136,20 @@
       <input type="range" data-set="review" min="0" max="1" step="0.01">
       <label class="check"><input type="checkbox" id="show-ddm"> show the accumulator next to the task</label>
       <label class="check"><input type="checkbox" data-set="return_skipped"> skipped questions come back too</label>
-      <label class="check"><input type="checkbox" data-set="controller"> controller sets target, review, feedback, skipped, redo prompts</label>
+      <label class="check"><input type="checkbox" data-set="controller"> controller sets every setting but the stage count</label>
       <label class="check"><input type="checkbox" data-set="show_count"> show stage count</label>
-      <label class="check"><input type="checkbox" data-set="show_score"> show score so far</label>
+      <label class="check"><input type="checkbox" data-set="show_score"> show score (hidden, a set pays the fraction right)</label>
       <label class="check"><input type="checkbox" data-set="feedback"> feedback (from next set)</label>
       <label class="check"><input type="checkbox" data-set="show_choice"> offer repeat-or-continue</label>
+      <label class="check"><input type="checkbox" data-set="end_redos"> with feedback off, offer it after the score</label>
       <label>when not offered, it:</label>
       <label class="check"><input type="radio" name="forced" data-set="forced" value="continue"> continues</label>
       <label class="check"><input type="radio" name="forced" data-set="forced" value="repeat"> repeats</label>
+      <label>countdown on redo prompts:</label>
+      <label class="check"><input type="radio" name="countdown" data-set="countdown" value="0"> off</label>
+      <label class="check"><input type="radio" name="countdown" data-set="countdown" value="2"> 2 s</label>
+      <label class="check"><input type="radio" name="countdown" data-set="countdown" value="3"> 3 s</label>
+      <label class="check"><input type="radio" name="countdown" data-set="countdown" value="5"> 5 s</label>
     </section>
     <section>
       <h2>Behind the scenes</h2>
@@ -188,6 +201,7 @@ let screen = null;
 let shownAt = 0;      // when the current screen was painted, for reaction times
 let busy = false;
 let keyHandler = null;
+let countdownTimer = null; // the countdown on the decision on screen, if it has one
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -224,6 +238,8 @@ function painted(fn) { requestAnimationFrame(() => requestAnimationFrame(() => {
 function setScreen(...nodes) {
   if (keyHandler) document.removeEventListener("keydown", keyHandler);
   keyHandler = null;
+  clearTimeout(countdownTimer);
+  countdownTimer = null;
   task.replaceChildren(...nodes);
 }
 
@@ -307,12 +323,13 @@ async function apply(data) {
   if (view.seq === seq && !data.flashes.length) return; // same screen: keep its clock
   seq = view.seq;
   screen = null; // nothing to answer while a flash is up
-  for (const text of data.flashes) {
-    setScreen(el("div", { class: "flash " + text }, text));
+  for (const f of data.flashes) {
+    setScreen(el("div", { class: "flash " + f.kind }, f.text));
     await new Promise(r => setTimeout(r, FLASH_MS));
   }
   if (view.screen === "question") drawQuestion(view);
   else if (view.screen === "decision") drawDecision(view);
+  else if (view.screen === "summary") drawSummary(view);
   else if (view.screen === "closed") ended(view.abandoned ? "This session was closed." : "Saved. See you next time.");
 }
 
@@ -338,13 +355,38 @@ function drawQuestion(view) {
 function drawDecision(view) {
   const yes = el("button", { class: "primary", onclick: () => decide(1) }, el("kbd", {}, "1"), view.yes);
   const no = el("button", { onclick: () => decide(0) }, el("kbd", {}, "2"), view.no);
-  setScreen(el("div", { class: "prompt" }, view.prompt), el("div", { class: "row" }, yes, no));
+  const clock = view.deadline ? el("div", { class: "countdown" }, view.deadline.toFixed(1) + " s") : null;
+  setScreen(el("div", { class: "prompt" }, view.prompt), el("div", { class: "row" }, yes, no),
+            ...(clock ? [clock] : []));
   keyHandler = e => {
     if (e.key === "1") decide(1);
     else if (e.key === "2") decide(0);
   };
   document.addEventListener("keydown", keyHandler);
-  painted(() => { screen = "decision"; if (!ddmFrame) ddmFrame = requestAnimationFrame(drawModel); });
+  // Timed from the paint, as the RT is. When it runs out the prompt closes undecided.
+  const count = () => {
+    const left = view.deadline - secs();
+    if (left <= 0) { decide(null); return; }
+    clock.textContent = left.toFixed(1) + " s";
+    countdownTimer = setTimeout(count, 100);
+  };
+  painted(() => {
+    screen = "decision";
+    if (clock) count();
+    if (!ddmFrame) ddmFrame = requestAnimationFrame(drawModel);
+  });
+}
+
+// The end of a set played with feedback hidden: how each question went, then the total.
+function drawSummary(view) {
+  const rows = view.rows.map(r => el("div", { class: r.outcome }, r.text));
+  setScreen(el("div", { class: "header" }, "end of set"),
+            el("div", { class: "summary" }, ...rows),
+            el("div", { class: "total" }, view.total),
+            el("button", { class: "primary", onclick: proceed }, el("kbd", {}, "enter"), "continue"));
+  keyHandler = e => { if (e.key === "Enter") proceed(); };
+  document.addEventListener("keydown", keyHandler);
+  painted(() => { screen = "summary"; });
 }
 
 function ended(message) {
@@ -372,6 +414,7 @@ async function send(path, extra) {
 function answer(raw) { if (screen === "question") send("/api/answer", { raw }); }
 function skip() { if (screen === "question") send("/api/skip"); }
 function decide(go) { if (screen === "decision") send("/api/decide", { go }); }
+function proceed() { if (screen === "summary") send("/api/continue"); }
 
 // Leaving the page is closing the window: logged with what was on screen and for how long.
 window.addEventListener("pagehide", () => {
@@ -392,7 +435,7 @@ function updatePanel(data) {
     if (input === document.activeElement) continue; // don't pull a control out from under a drag
     const v = data.settings[input.dataset.set];
     if (input.type === "checkbox") input.checked = v;
-    else if (input.type === "radio") input.checked = input.value === v;
+    else if (input.type === "radio") input.checked = input.value === String(v) || Number(input.value) === v;
     else input.value = v;
   }
   for (const span of panel.querySelectorAll("[data-val]")) {
@@ -447,8 +490,9 @@ function showModel(m) {
     `${label}:  value ${m.value.toFixed(2)}  cost ${m.cost.toFixed(2)}`,
     `f ${m.f.toFixed(2)}  k ${m.k.toFixed(2)}  T0 ${m.t0.toFixed(2)}s  ->  drift ${m.drift.toFixed(2)}`,
     `predicted: ${m.yes} ${pct(m.p_go)}  ${m.no} ${pct(m.p_no)}  undecided by ${m.t_dur}s ${pct(m.p_undecided)}`,
-    m.go === null ? "deciding..." : `you: ${m.go ? m.yes : m.no} at ${m.rt.toFixed(2)}s`
-      + (m.rt > m.t_dur ? " (past the deadline: undecided to the fit)" : ""),
+    !m.decided ? "deciding..." : m.go === null ? "the countdown ran out: no redo"
+      : `you: ${m.go ? m.yes : m.no} at ${m.rt.toFixed(2)}s`
+        + (m.rt > m.t_dur ? " (past the deadline: undecided to the fit)" : ""),
     m.note,
   ].join("\n");
   if (!ddmFrame) ddmFrame = requestAnimationFrame(drawModel);
@@ -458,6 +502,7 @@ function showModel(m) {
 function ddmClock() {
   if (!model) return 0;
   if (model.go !== null) return model.rt;
+  if (model.decided) return model.t_dur; // the countdown ran out
   if (screen === "decision" && seq === model.seq) return secs();
   return 0;
 }
@@ -557,7 +602,7 @@ function drawModel() {
     g.fillText("you", X(m.rt) + (m.rt > m.t_dur / 2 ? -10 : 10), y - 8);
   }
 
-  if (m.go === null && screen === "decision" && now < m.t_dur) ddmFrame = requestAnimationFrame(drawModel);
+  if (!m.decided && screen === "decision" && now < m.t_dur) ddmFrame = requestAnimationFrame(drawModel);
 }
 
 // Beside the task, for a player with dev stuff who ticked the box. Remembered per browser.
@@ -579,7 +624,7 @@ for (const input of panel.querySelectorAll("[data-set]")) {
   input.addEventListener("change", async () => {
     const name = input.dataset.set;
     const value = input.type === "checkbox" ? input.checked
-                : input.type === "radio" || name === "forced" ? input.value : Number(input.value);
+                : name === "forced" ? input.value : Number(input.value);
     input.blur();
     try { updatePanel(await call("/api/settings", { token, settings: { [name]: value } })); } catch (e) {}
   });

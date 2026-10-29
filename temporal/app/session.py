@@ -2,9 +2,9 @@
 
 A frontend (desktop.py, web.py) subclasses `Session` and draws the screens; every rule
 lives here, so both frontends write the same record. Screen code goes through the hooks
-`make_var`, `build`, `clear`, `refresh_stats`, `render_problem`, `ask_decision` and
-`flash`, so a change to the flow needs no frontend change unless it adds a new kind of
-screen.
+`make_var`, `build`, `clear`, `refresh_stats`, `render_problem`, `ask_decision`, `flash`
+and `show_summary`, so a change to the flow needs no frontend change unless it adds a new
+kind of screen.
 """
 import atexit
 import copy
@@ -14,15 +14,16 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
-from ..controller import CANDIDATES, REVIEW_LEVELS, InfoController, plan_in_worker
-from ..inference import fit, passages_to_frame
+from ..controller import (APP_CANDIDATES, REVIEW_LEVELS, STAGE_LEVELS, AppController,
+                          plan_in_worker)
+from ..inference import decision_arrays, fit_closed_form, passages_to_frame
 from ..model.accumulator import snap_cost, snap_value
 from ..model.competence import settle_skipped, update_ability
 from ..model.conditions import cost_components, stage_conditions, value_at_choice_point
 from ..model.params import ModelState, UserParams
 from ..model.persistence import fit_patience
 from ..model.questions import TYPES, Ratings, choose_type
-from ..model.value import slot_reward, value_of_stage
+from ..model.value import ACHIEVEMENT_SCALE, late_reward, slot_reward, value_of_stage
 from .store import DATA_DIR, Store, closed_cleanly, state_from_dict, state_to_dict
 
 PLAN_EVERY = 5         # sets (start decisions) between controller plans
@@ -43,6 +44,8 @@ DEFAULTS = {
     "show_score": True,
     "feedback": True,
     "show_choice": True,
+    "end_redos": False,      # with feedback hidden, offer the set's misses after its score
+    "countdown": 0.0,        # seconds on every redo prompt; 0 for none
     "forced": "continue",
 }
 SETTINGS = tuple(DEFAULTS)
@@ -65,8 +68,8 @@ def rebuild_from_record(events):
         if node == "stage":
             after_repeat = e.get("GO") == 1  # older records do not mark redos; this infers them
             continue
-        if node == "set_start":
-            miss, after_repeat = None, False
+        if node in ("set_start", "score"):
+            miss, after_repeat = None, False  # a redo after the score is never a typo fix
         elif node == "retired":
             failed.pop(e.get("question"), None)
         if node not in ("answer", "skip"):
@@ -98,9 +101,12 @@ def rebuild_from_record(events):
     return ratings, failed
 
 
-# f and k from decisions, patience from answer and skip times, as text.
-def fit_summary(df, attempts):
-    f_hat, k_hat, t0_hat = fit(df, t0=True)
+# f, k, T0 and λ from decisions, patience from answer and skip times, as text. Redo
+# prompts under a countdown are read at their own bound and deadline (fit_closed_form).
+def fit_summary(passages, attempts):
+    f_hat, k_hat, t0_hat, lam_hat = fit_closed_form(passages)
+    go, *_, deadline = decision_arrays(passages)
+    timed = int((~np.isnan(deadline)).sum())
     gave_up = int(attempts["skipped"].sum()) if len(attempts) else 0
     patience = f"{fit_patience(f_hat, k_hat, attempts):5.1f}s" if gave_up else "  n/a"
     return "\n".join([
@@ -108,7 +114,8 @@ def fit_summary(df, attempts):
         f"k (effort push)  {k_hat:5.2f}",
         f"patience         {patience}",
         f"non-decision     {t0_hat:5.2f}s",
-        f"f, k: {len(df)} decisions",
+        f"λ (countdown)    {lam_hat:5.2f}" if timed else "λ (countdown)      n/a",
+        f"f, k: {int((go >= 0).sum())} decisions, {timed} under a countdown",
         f"patience: {len(attempts)} questions, {gave_up} given up",
         "rough under ~700 decisions",
     ])
@@ -133,13 +140,20 @@ class Session:
         self.reviewing = False
         self.source = None   # for one that came back: "missed" or "skipped"; None when new
         self.redo = False    # the question on screen is an immediate redo of a miss
+        self.at_end = False  # past the set's last slot: its score and end-of-set redos
+        self.unseen = []     # (type, question, number) missed new this set, feedback hidden
+        self.set_log = []    # (line, outcome) for each question of the set, for its summary
+        self.end_number = 0  # which question of the set a redo after the score is
+        self.end_points = 0.0  # what that redo earned, for its flash
+        self.end_misses = [] # those still to be offered on the end-of-set screen
+        self.score = 0.0     # TD reward landed since the app was opened: the score on screen
         self.first_pending = True  # no question shown yet since the app was opened
         self.first_of_launch = False
         self.target_now = 0.75
         self.shown_this_set = set()
         self.last_miss = None
         self.retire_pending = None
-        self.screen = None   # "question", "redo", "start", or None between screens
+        self.screen = None   # "question", "redo", "score", "start", or None between screens
         self.prompt_at = time.perf_counter()
         self.launched_at = time.time()
         self.closed = False
@@ -147,7 +161,7 @@ class Session:
         self.decision_now = None  # the last start or redo prompt, for the live model view
 
         self.controller = None
-        self.controller_status = "off"
+        self.controller_note = ""  # what the last plan this launch found, or why it failed
         self._pool = None
         self._plan_future = None
 
@@ -174,13 +188,21 @@ class Session:
     def render_problem(self, text, header):
         raise NotImplementedError
 
-    # A two-button decision with no deadline. `on_done(go, rt)`; RT is time to click.
-    # A choice slower than T_DUR is kept, and read as undecided when fitting.
-    def ask_decision(self, prompt, yes_label, no_label, on_done):
+    # A two-button decision. `on_done(go, rt)`; RT is time to click. With no `deadline` it
+    # waits, and a choice slower than T_DUR is kept and read as undecided when fitting.
+    # With one, it shows a countdown of that many seconds and closes when it runs out,
+    # calling `on_done(None, None)`.
+    def ask_decision(self, prompt, yes_label, no_label, on_done, deadline=None):
         raise NotImplementedError
 
     # Show `text` briefly, then call `then`.
     def flash(self, text, then):
+        raise NotImplementedError
+
+    # The summary that ends a set played with feedback hidden: `rows`, one (line, outcome)
+    # per question, outcome "correct", "incorrect" or "skipped"; then `total`. It stays
+    # until they continue, then calls `then`.
+    def show_summary(self, rows, total, then):
         raise NotImplementedError
 
     # ------------------------------------------------------------ load / save
@@ -255,13 +277,14 @@ class Session:
         controller, failed = self.store.load_controller()
         if failed:
             self.store.append({"node": "controller_reset", "session": self.session})
-        if controller is not None and not isinstance(controller, InfoController):
-            # A saved reward controller from before 2026-10-11: start a measuring one.
-            # Nothing is lost, its estimate is refit from the record.
+        if controller is not None and not isinstance(controller, AppController):
+            # A saved one from before 2026-10-29 (a reward controller, or InfoController
+            # over 96 settings): start the app's. Nothing is lost, its estimate is refit
+            # from the record.
             self.store.append({"node": "controller_reset", "session": self.session})
             controller = None
         if controller is not None:
-            controller.candidates = CANDIDATES  # a saved one may predate a new setting
+            controller.candidates = APP_CANDIDATES  # a saved one may predate a new setting
         self.controller = controller
 
     def persist(self):
@@ -305,6 +328,7 @@ class Session:
             f"sets done        {s.episodes:6d}",
             f"start: yes / no  {yes:3d} / {no}",
             f"redo decisions   {len(s.first_passage):6d}",
+            f"score (session)  {self.score:6.2f}",
         ])
 
     def now_text(self):
@@ -318,9 +342,14 @@ class Session:
         s.rpe = {r: 0 for r in range(s.stage_amt)}
         s.in_session = True  # playing a set is being in the task
         self.feedback_this_set = self.v_feedback.get()
+        self.score_this_set = self.v_show_score.get()  # and with it, what the set pays
+        self.set_points = 0.0  # TD reward landed in this set
         self.reviewing = False
         self.source = None
         self.redo = False
+        self.at_end = False
+        self.unseen = []
+        self.set_log = []
         self.last_miss = None
         self.shown_this_set = set()
         self.review_showings = 0
@@ -332,7 +361,11 @@ class Session:
         self.store.append({"node": "set_start", "session": self.session, "set": self.set_id,
                            "target": self.v_target.get(), "review_rate": self.v_review.get(),
                            "feedback": self.feedback_this_set,
-                           "controller": self.v_controller.get()})
+                           "controller": self.v_controller.get(), "stages": s.stage_amt,
+                           "show_score": self.score_this_set,
+                           "redo_prompts": self.v_show_choice.get(),
+                           "end_redos": self.v_end_redos.get(),
+                           "countdown": self.v_countdown.get(), "forced": self.v_forced.get()})
         self.maybe_plan()
         self.next_stage()
 
@@ -341,7 +374,7 @@ class Session:
         if self.steps >= MAX_EPISODE_STEPS:
             self.end_episode(abandoned=True)
         elif self.s >= self.state.stage_amt:
-            self.end_episode(abandoned=False)
+            self.end_of_set()
         else:
             self.show_problem()
 
@@ -372,10 +405,14 @@ class Session:
         self.p_now = self.ratings.p(self.item)
 
         header = []
-        if self.v_show_count.get():
+        if self.at_end:
+            header.append(f"end of set: question {self.end_number}")  # the summary's number
+        elif self.v_show_count.get():
             header.append(f"stage {self.s + 1} of {self.state.stage_amt}")
-        if self.v_show_score.get() and self.feedback_this_set:
-            header.append(f"{self.passed} right")
+        if self.score_this_set:
+            # Only what has landed. With feedback hidden that is nothing until the end of
+            # the set, so the score gives no miss away.
+            header.append(f"score {self.score:.2f}")
         if self.reviewing and self.feedback_this_set:
             header.append("review")  # flagged only with feedback on; it gives away a past miss
         self.render_problem(text, header)
@@ -432,22 +469,37 @@ class Session:
                 update_ability(self.state, self.item, correct, was_review)
                 if not was_review and not correct:
                     self.owed.setdefault(self.item, []).append(self.problem)
+                    if not self.feedback_this_set:
+                        self.unseen.append((self.item, self.problem, self.s + 1))
                 elif was_review and correct:
                     self._take(self.owed, self.item, self.problem)
             self.state.challenge += 1.0 - p
         if was_review and not redo and not correct:
             self._failed_return()
         self.sync_measurement()
-        if correct:
+        if self.at_end:
+            pass  # a redo after the score is not part of the set's score, which has been paid
+        elif correct:
             self.passed += 1
             self.achievement += 1.0 - p
         else:
             self.wrong += 1
+        if not self.at_end:
+            points = (f"  +{ACHIEVEMENT_SCALE * (1.0 - p) / self.state.stage_amt:.2f}"
+                      if correct and self.score_this_set else "")
+            self.set_log.append((f"question {self.s + 1}: {self.problem[0]} = {raw}  "
+                                 f"{'correct' if correct else 'incorrect'}{points}",
+                                 "correct" if correct else "incorrect"))
         rec = {"node": "answer", **self.question_record(), "given": raw, "correct": correct,
                "p": p, "rt": rt, "skipped": False, "slip": slip}
         self.state.persistence.append(rec)
         self.store.append(rec)
-        self.land()
+        if self.at_end:
+            # Its outcome is shown, so what it earns lands now (Simulation(end_feedback=True)),
+            # after the record, which keeps the error it was worked under.
+            self.end_points = self.land_late(p) if correct else 0.0
+        else:
+            self.land()
         self.persist()
         self.reviewing = False
         self.source = None
@@ -455,7 +507,7 @@ class Session:
 
         if correct or not self.feedback_this_set:
             # No redo prompt with feedback hidden: it would give the miss away. Owed
-            # questions come back through review instead.
+            # questions come back through review, or after the score (`end_of_set`).
             self.after_feedback(correct, self.advance)
         elif not self.v_show_choice.get():
             if self.v_forced.get() == "repeat":
@@ -481,6 +533,9 @@ class Session:
         was_review = self.reviewing
         self.review_showings += was_review
         self.state.skips += 1
+        if not self.at_end:
+            self.set_log.append((f"question {self.s + 1}: {self.problem[0]}  skipped",
+                                 "skipped"))
         if not was_review:
             # A new question joins the skipped ones; one given up on again stays put.
             self.state.skipped.append(self.item)
@@ -501,25 +556,59 @@ class Session:
     # The outcome just seen lands as reward and becomes a prediction error. Run per
     # outcome, not per slot, and before the redo prompt: they see how the question went,
     # that lands, and then they decide whether to take it again. With feedback hidden
-    # nothing lands until the end-of-set score, which pays the set in one lump.
+    # nothing lands until the end-of-set score, which pays the set in one lump. What lands
+    # is what the score shows: the (1 - p)-weighted right answers, or with the score hidden
+    # the fraction right (Simulation.show_score). It is added to the score on screen.
     def land(self):
+        if self.at_end:
+            return  # the score has paid the set: a redo after it lands through land_late
         last = self.state.stage_amt - 1
-        reward, self.credited = slot_reward(self.state, self.achievement, self.credited,
+        earned = self.achievement if self.score_this_set else self.passed / ACHIEVEMENT_SCALE
+        reward, self.credited = slot_reward(self.state, earned, self.credited,
                                             self.feedback_this_set, self.s == last)
+        self.score += reward
+        self.set_points += reward
         delta = value_of_stage(self.state, self.params, self.s, reward)
         self.state.rpe[self.s] = delta
         self.state.slot_delta = delta
         self.episode_deltas.append(delta)
 
+    # A right redo after the score: what it earns lands as more reward on the set's last
+    # step (value.late_reward), and the error carries into the next prompt and the next
+    # start decision. With the score hidden it earns the fraction right's share. Returns the
+    # reward, which the score shows.
+    def land_late(self, p):
+        n = self.state.stage_amt
+        earned = 1.0 - p if self.score_this_set else 1.0 / ACHIEVEMENT_SCALE
+        reward = ACHIEVEMENT_SCALE * earned / n
+        delta = late_reward(self.state, self.params, n - 1, reward)
+        self.episode_deltas.append(delta)
+        self.state.slot_delta += delta
+        self.state.total_reward += 1.0 - p
+        self.score += reward
+        return reward
+
     def after_feedback(self, correct, then):
-        if self.feedback_this_set:
+        if self.at_end:
+            # A redo after the score always shows how it went, and what it earned.
+            points = f" +{self.end_points:.2f}" if correct and self.score_this_set else ""
+            self.flash(("correct" if correct else "wrong") + points, then)
+        elif self.feedback_this_set:
             self.flash("correct" if correct else "wrong", then)
         else:
             then()
 
-    # The redo node (conditions.stage_conditions). Only reached with feedback on.
+    # The redo node (conditions.stage_conditions): after a miss shown with feedback on, or
+    # after the score of a set played with it hidden. There it is the same node at the
+    # set's last slot (Simulation._redoes_at_end), and the question is named, since its
+    # miss was not shown when it happened.
     def ask_repeat(self):
-        value, cost = stage_conditions(self.state, self.params, self.s, self.item)
+        end = self.at_end
+        slot = self.state.stage_amt - 1 if end else self.s
+        value, cost = stage_conditions(self.state, self.params, slot, self.item)
+        # Under a countdown it closes undecided at the deadline, and they move on
+        # (model/pressure.py): fitted as censored at bound λ·BOUND and that deadline.
+        deadline = float(self.v_countdown.get()) or None
         self.screen = "redo"
 
         def done(go, rt):
@@ -528,6 +617,10 @@ class Session:
                    "value": snap_value(value), "cost": snap_cost(cost), "GO": go, "RT": rt,
                    "stage": self.s, "item": self.item, "timestep": self.state.t,
                    "slot_delta": self.state.slot_delta}
+            if deadline is not None:
+                rec["deadline"] = deadline
+            if end:
+                rec.update(end=True, question=self.problem[0])
             self.state.first_passage.append(rec)
             self.store.append(rec)
             self.persist()
@@ -535,21 +628,66 @@ class Session:
                 self.reviewing = True
                 self.source = "missed"
                 self.redo = True
-                self.next_stage()
+                self.show_problem() if end else self.next_stage()
             else:
                 self.advance()
 
-        self.decide_on("stage", value, cost, "try this one again?", "repeat it", "move on", done)
+        prompt = (f"redo question {self.end_number}: {self.problem[0]}?" if end
+                  else "try this one again?")
+        self.decide_on("stage", value, cost, prompt, "repeat it", "move on", done, deadline)
 
-    # Move to the next slot.
+    # Move to the next slot, or after the score to the next miss.
     def advance(self):
         if self.retire_pending is not None:
             self._retire(*self.retire_pending)
             self.retire_pending = None
+        if self.at_end:
+            self.next_end_redo()
+            return
         self.s += 1
         self.next_stage()
 
+    # Every slot played. With feedback hidden the set ends on its score, which is when its
+    # reward lands (`land` paid it at the last slot). With end-of-set redos on, each new
+    # question missed in it is then offered again, one prompt at a time, as with
+    # Simulation(end_redos=True).
+    def end_of_set(self):
+        if self.feedback_this_set:
+            self.end_episode(abandoned=False)
+            return
+        self.at_end = True
+        # The error the score just produced is the whole set's, and it is what the first
+        # redo prompt carries. A right redo adds what it earned (`land_late`).
+        self.state.slot_delta = float(sum(self.episode_deltas))
+        offer = self.v_end_redos.get() and self.v_show_choice.get()
+        self.end_misses = list(self.unseen) if offer else []
+        # Other answers have moved the ratings since those misses, so a quick right answer
+        # to one cannot be undone as a typo.
+        self.last_miss = None
+        n = self.state.stage_amt
+        self.store.append({"node": "score", "session": self.session, "set": self.set_id,
+                           "passed": self.passed, "stage_amt": n, "points": self.set_points,
+                           "score": self.score, "show_score": self.score_this_set,
+                           "set_delta": self.state.slot_delta, "offered": len(self.end_misses)})
+        self.screen = "score"
+        self.persist()
+        # How each question went (points only with the score shown), then the set's points
+        # and the score, or with the score hidden how many were right.
+        total = (f"+{self.set_points:.2f} this set, score {self.score:.2f}"
+                 if self.score_this_set else f"{self.passed} of {n} right")
+        self.show_summary(list(self.set_log), total, self.next_end_redo)
+
+    # The next miss to offer after the score, or with none left the start prompt.
+    def next_end_redo(self):
+        self.screen = None
+        if not self.end_misses:
+            self.end_episode(abandoned=False)
+            return
+        self.item, self.problem, self.end_number = self.end_misses.pop(0)
+        self.ask_repeat()
+
     def end_episode(self, abandoned):
+        self.at_end = False
         s = self.state
         n = s.stage_amt
         s.total_reward += self.achievement
@@ -611,16 +749,19 @@ class Session:
                        "start the next set", "I'm done", done)
 
     # Put a decision on screen, keeping its conditions and outcome for the live model view.
-    def decide_on(self, node, value, cost, prompt, yes_label, no_label, on_done):
+    def decide_on(self, node, value, cost, prompt, yes_label, no_label, on_done, deadline=None):
         now = self.decision_now = {"node": node, "value": snap_value(value),
                                    "cost": snap_cost(cost), "prompt": prompt,
-                                   "yes": yes_label, "no": no_label, "go": None, "rt": None}
+                                   "yes": yes_label, "no": no_label, "go": None, "rt": None,
+                                   "deadline": deadline, "decided": False}
 
         def done(go, rt):
-            now.update(go=go, rt=rt)
+            if deadline is not None and (go is None or rt is None or rt >= deadline):
+                go, rt = None, None  # the countdown ran out first
+            now.update(go=go, rt=rt, decided=True)
             on_done(go, rt)
 
-        self.ask_decision(prompt, yes_label, no_label, done)
+        self.ask_decision(prompt, yes_label, no_label, done, deadline)
 
     # ------------------------------------------------------------ owed questions
 
@@ -736,23 +877,51 @@ class Session:
         r = min(REVIEW_LEVELS, key=lambda x: abs(x - self.v_review.get()))
         # With review at 0 nothing comes back, so "skipped come back" means nothing.
         rs = self.v_return_skipped.get() and r > 0
-        # Redo prompts decide the match first: the candidates with them have no review.
-        return min(CANDIDATES, key=lambda e: (e.redo_prompts != redo) * 100
-                   + abs(e.target_p - t) + (e.feedback != fb) * 10
-                   + ((e.review_rate != r) * 10 + (e.return_skipped != rs) * 10
-                      if not redo else 0))
+        # End-of-set redos mean something only with redo prompts on and feedback hidden,
+        # a forced repeat only with them off and feedback on, a countdown only with them on.
+        end = self.v_end_redos.get() and redo and not fb
+        forced = not redo and fb and self.v_forced.get() == "repeat"
+        countdown = self.v_countdown.get() if redo else 0.0
+        n = min(STAGE_LEVELS, key=lambda x: abs(x - self.v_stages.get()))
+        shape = (redo, end, forced, self.v_show_score.get(), n)
+        # What kind of setting it is decides the match first, then feedback and target.
+        # Settings with redo prompts or a forced repeat have no review.
+        return min(APP_CANDIDATES, key=lambda e: 100 * sum(
+            a != b for a, b in zip((e.redo_prompts, e.end_redos, e.forced, e.show_score,
+                                    e.stage_amt), shape))
+            + (e.feedback != fb) * 10 + abs(e.target_p - t)
+            + (abs((e.countdown if e.pressure else 0.0) - countdown) if redo else 0)
+            + ((e.review_rate != r) * 10 + (e.return_skipped != rs) * 10
+               if not (redo or forced) else 0))
+
+    # What the controller is doing, for the panel: off, planning, or on and waiting for its
+    # next plan, which comes at the start of a set once PLAN_EVERY start decisions have
+    # passed since the last one (a saved controller keeps counting across launches).
+    def controller_text(self):
+        on = self.v_controller.get()
+        if self._plan_future is not None:
+            return "planning..." if on else "off (the plan under way will be discarded)"
+        if not on:
+            return "off"
+        ctl = self.controller
+        if ctl is None or ctl.last_plan is None:
+            head = "on, first plan when the next set starts"
+        else:
+            left = ctl.min_spacing - (len(self.state.initiation_passages) - ctl.last_plan)
+            head = ("on, plans when the next set starts" if left <= 0 else
+                    f"on, next plan in {left} set{'s' if left > 1 else ''}")
+        return head + (f". Last plan: {self.controller_note}" if self.controller_note else "")
 
     def maybe_plan(self):
         if not self.v_controller.get() or self._plan_future is not None:
             return
         if self.controller is None:
-            self.controller = InfoController(start=self.current_environment(),
-                                             min_spacing=PLAN_EVERY)
+            self.controller = AppController(start=self.current_environment(),
+                                            min_spacing=PLAN_EVERY)
         if not self.controller.due(self.state):
             return
         # The settings may have been moved by hand since the last plan.
         self.controller.env = self.current_environment()
-        self.controller_status = "planning..."
         # Copy now: the worker pickles later, while this thread keeps logging.
         self._plan_future = self.executor().submit(
             plan_in_worker, self.controller, copy.deepcopy(self.state), self.params)
@@ -769,11 +938,11 @@ class Session:
         try:
             self.controller, update = fut.result()
         except Exception as exc:
-            self.controller_status = f"planning failed: {exc}"
+            self.controller_note = f"failed: {exc}"
             self.refresh_stats()
             return
         if not self.v_controller.get():
-            self.controller_status = "off (last plan discarded)"
+            self.controller_note = "discarded: the controller was turned off while it ran"
             self.refresh_stats()
             return
 
@@ -783,8 +952,14 @@ class Session:
         self.v_feedback.set(env.feedback)
         self.v_return_skipped.set(env.return_skipped)
         self.v_show_choice.set(env.redo_prompts)
-        self.controller_status = (
-            f"f {est.f:.2f}, k {est.k:.2f}, patience {est.patience:.1f}s, T0 {est.t0:.2f}s "
+        self.v_end_redos.set(env.end_redos)
+        self.v_countdown.set(env.countdown if env.pressure else 0.0)
+        self.v_forced.set("repeat" if env.forced else "continue")
+        self.v_stages.set(env.stage_amt)  # these two from the next set
+        self.v_show_score.set(env.show_score)
+        self.controller_note = (
+            f"f {est.f:.2f}, k {est.k:.2f}, λ {est.lam:.2f}, patience {est.patience:.1f}s, "
+            f"T0 {est.t0:.2f}s "
             f"from {est.rows} rows ({est.note}). Next: {env} -- {update.reason}.")
         self.store.save_controller(self.controller)
         self.store.append({"node": "controller", "session": self.session, "set": self.set_id,
@@ -792,7 +967,11 @@ class Session:
                            "patience": est.patience, "t0": est.t0, "note": est.note,
                            "target": env.target_p, "review_rate": env.review_rate,
                            "feedback_on": env.feedback, "return_skipped": env.return_skipped,
-                           "redo_prompts": env.redo_prompts, "switched": env != update.previous,
+                           "redo_prompts": env.redo_prompts, "end_redos": env.end_redos,
+                           "countdown": env.countdown if env.pressure else 0.0,
+                           "forced": env.forced, "stages": env.stage_amt,
+                           "show_score": env.show_score, "lam": est.lam,
+                           "switched": env != update.previous,
                            "reason": update.reason})
         self.refresh_stats()
 
@@ -805,6 +984,9 @@ class Session:
         if self._pool is not None:
             self._pool.shutdown(wait=False, cancel_futures=True)
 
-    # Every decision so far, as the fit reads them.
+    # Every decision so far: the records, and as pyddm's fit reads them.
+    def decisions(self):
+        return self.state.initiation_passages + self.state.first_passage
+
     def frame(self):
-        return passages_to_frame(self.state.initiation_passages + self.state.first_passage)
+        return passages_to_frame(self.decisions())
