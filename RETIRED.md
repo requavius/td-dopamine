@@ -40,7 +40,8 @@ V2.
 Changes under V4 that did not change the model (2026-10-28): γ, and in one experiment
 `BOUND` and `T0` as well, can be fitted per person instead of held at 0.9 and 1.5 (README,
 "Fitting the discount factor" and "The bound can be fitted"); a closed-form likelihood
-(`temporal/fastlik.py`) that matches pyddm's; and the simulator records the achievement
+(`temporal/fastlik.py`) that matches pyddm's; α fitted in one experiment (2026-10-29,
+README, "α can be fitted, but not for everyone"); and the simulator records the achievement
 reward as it accrues, which changes no draw (the regression tests pass unchanged). No
 earlier result was re-measured: every result fitted with γ at 0.9 stands, under that
 condition. What these changes retired is listed below, under "Claims withdrawn under
@@ -896,6 +897,7 @@ came back near 0.94 whatever its true value. Replaced by the drift-diffusion mod
 |---|---|---|---|
 | "`SIGMA`, `BOUND` and `T_DUR` are held fixed so they cannot absorb variance; freeing them removes the identifiability" | README, "Fixed parameters carry the identifiability"; `accumulator.py`'s docstring | README, "What can be fixed, and what fixing costs": `SIGMA` must be fixed, `BOUND` can be fitted, `T_DUR` is not a parameter | Only a common rescaling of drift, bound and noise is unobservable, so one of the three sets the unit; with the noise fixed the bound is identified, which is the standard DDM's own convention. `T_DUR` is where the analysis stops reading a decision, not something a person has. The measured test is "The bound can be fitted". |
 | "`f` is identified only up to γ", as a property of the model | README, "Reporting conventions" and the first known limitation | "up to γ unless γ is fitted" | γ can be recovered from the app's decisions (README, "Fitting the discount factor": the estimate was the true γ in 60 of 60 runs, and `f` unbiased once it was fitted) |
+| "α is assumed (0.05) in every fit", the largest remaining assumed constant | README, known limitations and "What can be fixed" | α fitted with `f`, `k`, γ, `BOUND` and `T0` by replaying a logged reward stream | log α is recovered with r 0.73 and a median Fisher SE of 0.46, below the factor-of-2 line fixed before the run (README, "α can be fitted, but not for everyone"); for a quarter of people, mostly with low `f`, it remains weakly identified, and the app's fit still assumes 0.05 |
 | Fisher information "has not been used as a diagnostic", under deferred next steps | README, "Next steps" | `experiments/recovery_lhc.py` computes it for `f`, `k`, γ, `BOUND` and `T0` and checks its standard errors against the fits | built |
 
 ## Implementations that did not pan out

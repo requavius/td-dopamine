@@ -424,6 +424,24 @@ estimate: a profile likelihood, `(f, k)` fitted at each candidate. The app recor
 everything the replay needs. In simulation the replay runs alongside the person, as
 shadow learners (`experiments/gamma_profile.py`, `GridShadow`).
 
+**Fitting α (since 2026-10-29).** A second axis of shadow learners, one per (γ, α), would
+multiply what each history stores, so instead the reward stream is logged once and
+replayed at fit time (`experiments/recovery_alpha.py`). The log (`EventLog`, a
+`GridShadow` subclass) holds every TD step's slot and the model's reward there, every
+set's end and whether it was abandoned, and every recorded decision's place among them:
+about 3,000 steps per person. The replay runs the TD learner of `temporal/model/value.py`
+on that log at every (γ, α) of a grid at once (γ 0.50 to 0.99 in steps of 0.01; 23 values
+of α from 0.005 to about 0.34, evenly spaced in log α, 0.05 among them), in about 0.6 s per
+person. Each decision gets its value in two parts, as the shadows give it: `V(0)` or the
+slot's share, and the carried error before its clip at ±1. Both parts are interpolated
+by tensor-product cubic splines over (γ, log α), and the error is clipped after
+interpolating. Clipping first puts kinks in value that the splines miss by up to 0.008,
+a sixth of the 0.05 value step, while the unclipped parts interpolate to within
+2.3e-4 of a direct replay. At α 0.05 the replay equals the shadows to 7e-16
+(`python -m experiments.recovery_alpha check`, and `tests/test_replay.py` on a run with
+redos, hidden feedback and abandoned sets). The fit is recovery_lhc's with log α as a
+sixth parameter, bounded to [log 0.005, log 0.3].
+
 **A closed-form likelihood (since 2026-10-28, `temporal/fastlik.py`).** With a constant
 drift the accumulator's first-passage density has a standard series (Navarro & Fuss,
 2009), and the chance of reaching neither bound by `T_DUR` has one too. `fastlik` adds
@@ -1002,6 +1020,73 @@ truth; **L4**, report the correlation of γ with `f` from the inverse Fisher inf
 - **The finite-difference step does not matter**: the median ratio of γ's SE at half the
   step to its SE at the step is 0.999.
 
+### α can be fitted, but not for everyone: f, k, γ, α, BOUND and T0 together
+
+**Design** (2026-10-29; `python -m experiments.recovery_alpha`). The previous section's
+design with the learning rate α varied and fitted: 100 people from a new seeded Latin
+hypercube over the same five ranges plus α in 0.01 to 0.2, uniform in log α. Each plays
+the app's task under `InfoController` (planning with γ 0.9 and α 0.05, as the app does)
+for 300 start decisions plus their redo decisions. The person's history is the event log
+of "4. Inference", and value at any (γ, α) comes from replaying it. The same data are
+fitted three ways: (a) all six free; (b) α pinned at 0.05, the other five free (the
+previous section's method); (c) the current app method, γ 0.9, `BOUND` 1.5 and α 0.05
+pinned. Claims fixed before any simulation: **A1**, RMSE, bias and r for all six (no
+threshold); **A2**, with SE from the Fisher information at the truth, SD of z in 0.8 to
+1.25 and coverage in 90 to 98% for every parameter, fits with a parameter within two
+finite-difference steps of its bound excluded and counted; **A3**, the slope of `f`'s
+relative error (f̂ − f)/f on the true log α is within 2 SE of zero under (a) and positive
+beyond 2 SE under (b); **A4** (no claim), the correlations of log α with γ and `f` from
+the inverse Fisher information, and the median Fisher SE of log α, with α "identified
+too weakly to fit" if that median is log 2 (0.69) or more.
+
+**Results** (histories in `results/recovery_alpha/histories/`, fits in
+`results/recovery_alpha/fits.csv`). 722 recorded decisions per person on average (432 to
+862; 422 redo decisions). Five fits sat at a bound and are out of the calibration
+columns: four with α fitted at 0.005 or 0.3, all four people with `f` 0.45 or less, and
+one with `T0` fitted at 0 against a true 0.036 s.
+
+| | RMSE | bias (mean of recovered − true) | r | SD of z, observed | coverage, observed | SD of z, Fisher | coverage, Fisher |
+|---|---|---|---|---|---|---|---|
+| `f` | 0.083 | +0.017 ± 0.008 | 0.979 | 1.17 | 86/95 (90.5%) | 1.15 | 85/95 (89.5%) |
+| `k` | 0.078 | +0.010 ± 0.008 | 0.980 | 1.08 | 88/95 (92.6%) | 1.04 | 89/95 (93.7%) |
+| γ | 0.041 | +0.003 ± 0.004 | 0.931 | 1.20 | 88/95 (92.6%) | 1.05 | 87/95 (91.6%) |
+| log α | 0.695 | −0.033 ± 0.070 | 0.730 | 1.48 | 77/95 (81.1%) | 1.04 | 91/95 (95.8%) |
+| α | 0.052 | +0.005 ± 0.005 | 0.648 | | | | |
+| `BOUND` | 0.039 | −0.000 ± 0.004 | 0.991 | 0.99 | 90/95 (94.7%) | 0.98 | 91/95 (95.8%) |
+| `T0` (s) | 0.037 | +0.006 ± 0.004 | 0.952 | 1.06 | 87/95 (91.6%) | 1.03 | 87/95 (91.6%) |
+
+- **A1: α is recovered, coarsely.** log α has r 0.73 and RMSE 0.70, a factor of 2 on α,
+  without bias (−0.03 ± 0.07). Every other parameter keeps r 0.93 or more with α free,
+  at a cost: against the previous section (other people, α 0.05 and known), `f`'s RMSE rises
+  from 0.062 to 0.083, `k`'s from 0.054 to 0.078 and γ's from 0.028 to 0.041. `f` is
+  biased +0.017 ± 0.008 (2.1 SE) and `k` +0.010 ± 0.008; the expected +0.013 in `k` from
+  the rounded value the fit does not see is inside that.
+- **A2 does not hold, by one fit.** Every SD of z is 1.15 or less and five coverages are
+  91.6 to 95.8%, but `f`'s is 85 of 95 (89.5%) where 86 was needed. The Fisher error
+  bars on `f` are slightly too narrow. The observed information, not claimed, does worse
+  on α: SD of z 1.48 and 81% coverage, so α's error bars should come from the Fisher
+  information, not the Hessian at the fit.
+- **A3 holds.** Under (b), `f`'s relative error rises with the true log α, +0.103 ± 0.015
+  per unit: by tercile of α, −9.1 ± 2.4% (α 0.010 to 0.027), −2.5 ± 1.9% (0.028 to 0.073),
+  +12.8 ± 2.2% (0.076 to 0.195). Under (a) the slope is +0.028 ± 0.016, within 2 SE of
+  zero, and the terciles are +0.5 ± 2.4%, −0.9 ± 1.9%, +4.8 ± 2.7%. Fitting α removes
+  most of the α-driven bias in `f`, though the slope's point estimate is 1.75 SE from zero
+  and the top tercile still leans high, so not provably all of it. Overall, `f`'s relative
+  RMSE is 13.7% with α free against 15.4% pinned.
+- **A4: identified at the median, weakly for a quarter of people.** The median Fisher SE
+  of log α is 0.46 (a factor of 1.58 on α), below the log 2 line, so α is fitted rather
+  than assumed. But the SE ranges from 0.19 to 0.99 between the 10th and 90th
+  percentiles, and for 24% of people it is log 2 or more. It tracks reward sensitivity
+  (its correlation with the true `f` is −0.73, with the true γ −0.48): value enters the
+  drift as `f`·value, so a person whose decisions carry little value signal carries
+  little about how value was learned. Only 41% of the 100 reject α = 0.05 at the 5% level
+  (likelihood ratio, fit a against fit b). In the inverse Fisher information log α
+  correlates with `f` at a median of −0.38 (5th to 95th percentile −0.71 to −0.16) and
+  barely with γ (+0.12; −0.55 to +0.49); γ with `f` is −0.64.
+- **The current way of fitting does far worse on the same data.** With γ 0.9, `BOUND` 1.5
+  and α 0.05 pinned, `f` has RMSE 0.517 and bias −0.251 ± 0.045, `k` RMSE 0.260 and bias
+  +0.089 ± 0.025, as in the previous section.
+
 ### Which difficulty and whether to show feedback
 
 **2026-10-25.** Question-type task, skips on, one setting held for each run of 300 ticks, review 0.25, skipped questions dropped,
@@ -1505,7 +1590,8 @@ fits used γ = 0.9, `ACHIEVEMENT_SCALE = 4`, the continuing bootstrap and `T_DUR
   constants").
 - **`T_DUR` is not a parameter.** It is where the analysis stops reading a decision;
   slow deciders are described by the bound and `T0`.
-- **γ can be fitted** ("Fitting the discount factor"); α is still assumed.
+- **γ can be fitted** ("Fitting the discount factor"), and **so can α**, coarsely and
+  only where `f` is not small ("α can be fitted, but not for everyone").
 
 ### How value and cost together decide what can be measured
 
@@ -1569,10 +1655,13 @@ probed runs).
 - The reward is assumed. Right answers are worth `1 − p`; a person who values the
   fraction right instead gets `f` 46 to 54% too low even with γ fitted ("Fitting the
   discount factor", robustness). No fitted parameter absorbs this.
-- The learning rate α is assumed (0.05) in every fit, and with γ fitted it is the
-  largest remaining assumed constant: a person whose α is 0.01 to 0.2 gets `f` within 10%
-  at γ 0.8 but −36% to +51% at γ 0.95 ("Fitting the discount factor", robustness). γ itself
-  is still recovered to within one grid step.
+- The learning rate α can be fitted with the other five ("α can be fitted, but not for
+  everyone"), but only coarsely: log α has RMSE 0.70 (a factor of 2) and r 0.73, and for
+  a quarter of people, mostly those with low `f`, its standard error is a factor of 2 or
+  more. Every fit outside `experiments/recovery_alpha.py`, the app's included, still
+  assumes 0.05. With α pinned, a person whose α is 0.01 to 0.2 gets `f` −9% to +13% (by
+  tercile, γ fitted), and up to −36% to +51% at γ 0.95 ("Fitting the discount factor",
+  robustness).
 - With feedback hidden, the model pays the set's reward at an end-of-set score, but the
   app shows no end-of-set score: a hidden set never tells the person how they did. Every
   simulated result assumes the score is seen. The app needs the screen before human data
@@ -1733,9 +1822,6 @@ probed runs).
 
 ### Deferred, but kept in view
 
-- Fit α the way γ is fitted: replay the reward history at candidate (γ, α) pairs and
-  profile both. Whether α is identifiable from 300 start decisions plus redos has to be
-  tested first, the way γ was.
 - Which reward a person values could be measured rather than assumed: fit each person
   under `1 − p` and under the fraction right and compare likelihoods, after a recovery
   test shows the comparison picks the right one.
@@ -1791,6 +1877,7 @@ several.
 | Fitting the discount factor | `python -m experiments.gamma_profile` (split by `--gammas`, `--reps`, `--tag`) | `results/gamma_profile/runs_*.csv` |
 | γ when α, `BOUND` or the reward differ from the fit's | `python -m experiments.gamma_robustness` | `results/gamma_robustness/runs_*.csv` |
 | γ changes what feedback does | `python -m experiments.gamma_feedback` | `results/gamma_feedback/` |
+| α can be fitted, but not for everyone (and the replay check) | `python -m experiments.recovery_alpha simulate` (split by `--people`, `--tag`), then `fit`; `check` validates the replay | `results/recovery_alpha/` |
 | Intervals beside the controller comparison and the five-person feedback result (no simulation) | `python -m experiments.intervals` | `results/intervals.txt` |
 
 The `temporal recovery` sweeps print their tables as they finish; they have no `--replot`,
